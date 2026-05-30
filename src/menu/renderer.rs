@@ -5,7 +5,7 @@ use wgpu::util::DeviceExt;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
-    pub position: [f32; 2], // Posição em pixels: (x, y)
+    pub position: [f32; 2], // Posição em pixels lógicos: (x, y)
     pub color: [f32; 4],    // Cor RGBA: (r, g, b, a)
 }
 
@@ -25,33 +25,21 @@ impl Vertex {
     }
 }
 
-// 2. Uniform contendo o tamanho da tela
+// 2. Uniform contendo o tamanho LÓGICO do viewport (não da janela física)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
-    pub screen_size: [f32; 2],
-    pub _pad: [f32; 2], // Preenchimento obrigatório para alinhamento de 16 bytes na GPU
+    pub screen_size: [f32; 2], // Tamanho lógico do viewport em pixels
+    pub _pad: [f32; 2],        // Preenchimento obrigatório para alinhamento de 16 bytes na GPU
 }
 
-// 3. Estrutura do botão para controle de colisão/interação do mouse
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct Button {
-    pub id: &'static str,
+// 3. Viewport físico calculado a cada resize
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Viewport {
     pub x: f32,
     pub y: f32,
-    pub w: f32,
-    pub h: f32,
-    pub label: &'static str,
-    pub default_color: [f32; 4],
-    pub hover_color: [f32; 4],
-    pub click_color: [f32; 4],
-}
-
-impl Button {
-    pub fn is_hovered(&self, mx: f32, my: f32) -> bool {
-        mx >= self.x && mx <= self.x + self.w && my >= self.y && my <= self.y + self.h
-    }
+    pub width: f32,
+    pub height: f32,
 }
 
 // 4. O Renderer Simplificado
@@ -62,7 +50,7 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     pub is_surface_configured: bool,
     pub window: Arc<winit::window::Window>,
-    
+
     // Recursos de renderização
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -116,7 +104,7 @@ impl Renderer {
         // Carregar o Shader
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
 
-        // Criar recursos para a Uniform (Screen Size)
+        // Uniform inicial — o tamanho lógico será atualizado a cada resize
         let uniforms = Uniforms {
             screen_size: [size.width as f32, size.height as f32],
             _pad: [0.0, 0.0],
@@ -174,7 +162,7 @@ impl Renderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING), // Ativa mistura com canal Alpha (transparência)
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -182,7 +170,7 @@ impl Renderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None, // Sem culling para 2D plano simples
+                cull_mode: None,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -191,8 +179,7 @@ impl Renderer {
             cache: None,
         });
 
-        // Criar buffers dinâmicos para vértices e índices da GPU.
-        // Reservaremos um tamanho máximo padrão que podemos aumentar ou preencher
+        // Criar buffers dinâmicos para vértices e índices da GPU
         let max_vertices = 1000;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dynamic Vertex Buffer"),
@@ -227,30 +214,36 @@ impl Renderer {
         })
     }
 
+    /// Reconfigura a superfície WGPU com as dimensões FÍSICAS da janela.
+    /// O uniform screen_size é atualizado separadamente via update_logical_size().
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
-
-            // Atualiza tamanho no buffer Uniform
-            self.uniforms.screen_size = [width as f32, height as f32];
-            self.queue.write_buffer(
-                &self.uniform_buffer,
-                0,
-                bytemuck::cast_slice(&[self.uniforms]),
-            );
         }
     }
 
-    // Limpa a tela localmente para iniciar a emissão de geometrias no frame
+    /// Atualiza o uniform screen_size com as dimensões LÓGICAS do viewport.
+    /// Isso permite que o shader converta corretamente pixels lógicos → clip space,
+    /// independentemente do tamanho físico da janela.
+    pub fn update_logical_size(&mut self, logical_w: f32, logical_h: f32) {
+        self.uniforms.screen_size = [logical_w, logical_h];
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[self.uniforms]),
+        );
+    }
+
+    /// Limpa a tela localmente para iniciar a emissão de geometrias no frame.
     pub fn clear(&mut self) {
         self.vertices_data.clear();
         self.indices_data.clear();
     }
 
-    // Desenha um retângulo simples passando coordenadas em PIXELS
+    /// Desenha um retângulo simples passando coordenadas em PIXELS LÓGICOS do viewport.
     pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
         let base_index = self.vertices_data.len() as u16;
 
@@ -263,16 +256,16 @@ impl Renderer {
         self.vertices_data.extend_from_slice(&[v0, v1, v2, v3]);
 
         // Índices para fechar os dois triângulos do retângulo
-        // Triângulo 1: v0, v1, v2
-        // Triângulo 2: v0, v2, v3
         self.indices_data.extend_from_slice(&[
             base_index + 0, base_index + 1, base_index + 2,
             base_index + 0, base_index + 2, base_index + 3,
         ]);
     }
 
-    // Submete a renderização finalizada à GPU
-    pub fn present(&mut self) -> anyhow::Result<()> {
+    /// Submete a renderização finalizada à GPU.
+    /// O parâmetro `viewport` define a região FÍSICA da janela onde o conteúdo será desenhado.
+    /// O restante da janela será preenchido com a cor de clear (preto = letterbox/pillarbox).
+    pub fn present(&mut self, viewport: Viewport) -> anyhow::Result<()> {
         if !self.is_surface_configured {
             return Ok(());
         }
@@ -314,10 +307,11 @@ impl Renderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
+                        // Limpa toda a janela com preto — cria o efeito de barra de letterbox/pillarbox
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
+                            r: 0.05,
+                            g: 0.05,
+                            b: 0.05,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -330,8 +324,26 @@ impl Renderer {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            
-            // Desenha os índices gravados
+
+            // Define o viewport físico: apenas esta região da janela receberá pixels desenhados.
+            // Tudo fora fica com a cor de clear (preto) — letterbox automático!
+            render_pass.set_viewport(
+                viewport.x,
+                viewport.y,
+                viewport.width,
+                viewport.height,
+                0.0,
+                1.0,
+            );
+
+            // Aplica scissor rect igual ao viewport para não vazar pixels fora da área
+            render_pass.set_scissor_rect(
+                viewport.x as u32,
+                viewport.y as u32,
+                viewport.width as u32,
+                viewport.height as u32,
+            );
+
             let indices_count = self.indices_data.len() as u32;
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..indices_count, 0, 0..1);
