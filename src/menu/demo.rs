@@ -22,9 +22,9 @@ use winit::{
     window::Window,
 };
 
+use super::chess::ChessGame;
 use super::renderer::{Renderer, Texture, Viewport, carregar_png_ou_fallback, rasterizar_texto};
 use super::types::{ArrowButton, ArrowId, MenuItem, MenuState};
-use super::chess::ChessGame;
 
 // Resolução lógica base do design (independente do monitor).
 const BASE_WIDTH: f32 = 800.0;
@@ -73,6 +73,10 @@ pub struct App {
 
     // --- TELA DE JOGO ---
     chess_game: Option<ChessGame>,
+
+    saved_target_aspect_ratio: f32,
+    saved_width: u32,
+    saved_height: u32,
 }
 
 impl App {
@@ -102,28 +106,11 @@ impl App {
             MenuItem {
                 id: "games",
                 label: "Games",
-                children: Some(vec![
-                    MenuItem {
-                        id: "chess",
-                        label: "Chess",
-                        children: None,
-                    },
-                    MenuItem {
-                        id: "puzzle",
-                        label: "Puzzle",
-                        children: None,
-                    },
-                    MenuItem {
-                        id: "racer",
-                        label: "Racer",
-                        children: None,
-                    },
-                    MenuItem {
-                        id: "arcade",
-                        label: "Arcade",
-                        children: None,
-                    },
-                ]),
+                children: Some(vec![MenuItem {
+                    id: "chess",
+                    label: "Chess",
+                    children: None,
+                }]),
             },
             MenuItem {
                 id: "tools",
@@ -169,6 +156,9 @@ impl App {
             icones: Vec::new(),
             icones_sub: Vec::new(),
             chess_game: None,
+            saved_target_aspect_ratio: BASE_WIDTH / BASE_HEIGHT,
+            saved_width: BASE_WIDTH as u32,
+            saved_height: BASE_HEIGHT as u32,
         }
     }
 
@@ -269,16 +259,18 @@ impl App {
     fn resize_layout(&mut self, window_w: u32, window_h: u32) {
         let win_w = window_w as f32;
         let win_h = window_h as f32;
-        let ratio = self.target_aspect_ratio;
 
-        let (vp_w, vp_h) = if win_w / win_h > ratio {
-            (win_h * ratio, win_h) // pillarbox (barras laterais)
+        let (vp_w, vp_h, vp_x, vp_y) = if self.chess_game.is_some() {
+            (win_w, win_h, 0.0, 0.0)
         } else {
-            (win_w, win_w / ratio) // letterbox (barras em cima/baixo)
+            let ratio = self.target_aspect_ratio;
+            let (w, h) = if win_w / win_h > ratio {
+                (win_h * ratio, win_h) // pillarbox (barras laterais do menu)
+            } else {
+                (win_w, win_w / ratio) // letterbox (barras topo/baixo do menu)
+            };
+            (w, h, (win_w - w) * 0.5, (win_h - h) * 0.5)
         };
-
-        let vp_x = (win_w - vp_w) * 0.5;
-        let vp_y = (win_h - vp_h) * 0.5;
 
         self.viewport = Viewport {
             x: vp_x,
@@ -303,10 +295,29 @@ impl App {
         let right_x = vp_w - (80.0 * scale_factor) - right_w;
         let right_y = (vp_h * 0.5) - (right_h * 0.5);
 
-        let back_w = 40.0 * scale_factor;
-        let back_h = 40.0 * scale_factor;
-        let back_x = 20.0 * scale_factor;
-        let back_y = 20.0 * scale_factor;
+        // 2. Posicionamento adaptativo do botão "Back" dentro do Header do xadrez.
+        let (back_x, back_y, back_w, back_h) = if self.chess_game.is_some() {
+            // Alinhado com a escala inteligente protetora
+            let scale_factor = vp_w.min(vp_h * 0.8) / BASE_WIDTH;
+            let header_h = 75.0 * scale_factor;
+            let footer_h = 65.0 * scale_factor;
+            let available_h = (vp_h - header_h - footer_h).max(10.0);
+
+            let board_size = vp_w.min(available_h) * 0.92;
+            let chess_start_y = header_h + (available_h - board_size) * 0.5;
+
+            // Posiciona o botão de voltar centralizado dentro da nova área real do Header útil
+            let b_y = (chess_start_y * 0.25).max(4.0);
+            let b_h = (chess_start_y * 0.50).max(16.0).min(40.0 * scale_factor);
+            (b_y, b_y, b_h, b_h)
+        } else {
+            (
+                20.0 * scale_factor,
+                20.0 * scale_factor,
+                40.0 * scale_factor,
+                40.0 * scale_factor,
+            )
+        };
 
         self.arrows = vec![
             ArrowButton {
@@ -364,13 +375,23 @@ impl App {
 
         let vp_w = renderer.uniforms.screen_size[0];
         let vp_h = renderer.uniforms.screen_size[1];
+
+        // 1. Detecção de hover dos botões (calculado aqui, desenhado após o carrossel)
+        let mut hovered_arrow = None;
+        for arrow in &self.arrows {
+            if arrow.contains(self.mouse_pos.0, self.mouse_pos.1) {
+                hovered_arrow = Some(arrow.id);
+            }
+        }
+        self.hovered_arrow = hovered_arrow;
+
         let scale_factor = vp_w / BASE_WIDTH;
 
-        // 1. Fundo gradiente simulado com dois retângulos sobrepostos
+        // 2. Fundo gradiente simulado com dois retângulos sobrepostos
         renderer.draw_rect(0.0, 0.0, vp_w, vp_h, [0.08, 0.08, 0.12, 1.0]);
         renderer.draw_rect(0.0, vp_h * 0.5, vp_w, vp_h * 0.5, [0.10, 0.10, 0.16, 1.0]);
 
-        // 2. Barra superior com linha decorativa
+        // 3. Barra superior com linha decorativa
         let top_bar_h = 60.0 * scale_factor;
         renderer.draw_rect(0.0, 0.0, vp_w, top_bar_h, [0.13, 0.13, 0.18, 1.0]);
         renderer.draw_rect(
@@ -382,10 +403,51 @@ impl App {
         );
 
         if let Some(ref game) = self.chess_game {
-            // Renderiza apenas o tabuleiro de xadrez e o cursor
+            let scale_factor = vp_w.min(vp_h * 0.8) / BASE_WIDTH;
+
+            // Alinhamento idêntico ao do módulo chess
+            let header_h = 75.0 * scale_factor;
+            let footer_h = 65.0 * scale_factor;
+            let available_h = (vp_h - header_h - footer_h).max(10.0);
+
+            let board_size = vp_w.min(available_h) * 0.92;
+            let chess_start_y = header_h + (available_h - board_size) * 0.5;
+
+            // 1. Fundo geral escuro atrás de tudo
+            renderer.draw_rect(0.0, 0.0, vp_w, vp_h, [0.08, 0.08, 0.12, 1.0]);
+
+            // 2. Renderiza o tabuleiro de xadrez
             game.render(renderer, vp_w, vp_h)?;
 
-            // Renderiza o botão de voltar no canto superior esquerdo
+            // 3. DESENHA O HEADER (Barra do Topo)
+            renderer.draw_rect(0.0, 0.0, vp_w, chess_start_y, [0.13, 0.13, 0.18, 1.0]);
+            renderer.draw_rect(
+                0.0,
+                chess_start_y - 2.0 * scale_factor,
+                vp_w,
+                2.0 * scale_factor,
+                [0.3, 0.5, 0.9, 0.9],
+            );
+
+            // 4. DESENHA O FOOTER (Barra de Baixo)
+            let footer_y = chess_start_y + board_size;
+            let footer_render_h = vp_h - footer_y;
+            renderer.draw_rect(
+                0.0,
+                footer_y,
+                vp_w,
+                footer_render_h,
+                [0.13, 0.13, 0.18, 1.0],
+            );
+            renderer.draw_rect(
+                0.0,
+                footer_y,
+                vp_w,
+                2.0 * scale_factor,
+                [0.3, 0.5, 0.9, 0.9],
+            );
+
+            // 5. Renderiza o botão de voltar
             for arrow in &self.arrows {
                 if arrow.id == ArrowId::Back {
                     let is_hovered = self.hovered_arrow == Some(arrow.id);
@@ -418,15 +480,6 @@ impl App {
             renderer.present(self.viewport)?;
             return Ok(());
         }
-
-        // 3. Detecção de hover dos botões (calculado aqui, desenhado após o carrossel)
-        let mut hovered_arrow = None;
-        for arrow in &self.arrows {
-            if arrow.contains(self.mouse_pos.0, self.mouse_pos.1) {
-                hovered_arrow = Some(arrow.id);
-            }
-        }
-        self.hovered_arrow = hovered_arrow;
 
         // 4. Carrossel de menu
         let cx = vp_w * 0.5;
@@ -608,15 +661,30 @@ impl App {
             // Entrar no jogo de xadrez:
             // 1. Instanciar o jogo
             self.chess_game = Some(ChessGame::new());
-            // 2. Definir a proporção alvo como quadrada (1.0)
-            self.target_aspect_ratio = 1.0;
-            // 3. Requisitar que a janela fique quadrada
+
+            // 2. SALVAR o estado atual da janela antes de alterá-la,
+            // caso o usuário tenha feito ajustes manuais de tamanho
+            self.saved_target_aspect_ratio = self.target_aspect_ratio;
+            self.saved_width = self.last_width;
+            self.saved_height = self.last_height;
+
+            // 3. Definir a proporção alvo como quadrada (1.0)
+            self.target_aspect_ratio = 0.8;
+
+            // 4. Requisitar que a janela fique quadrada
             if let Some(ref renderer) = self.renderer {
                 let size = renderer.window.inner_size();
-                // Tornamos a largura igual à altura para ficar quadrado
-                let min_dim = size.width.min(size.height);
-                let _ = renderer.window.request_inner_size(winit::dpi::PhysicalSize::new(min_dim, min_dim));
-                self.pending_size = Some((min_dim, min_dim));
+                let new_height = size.height;
+                let new_width = (new_height as f32 * self.target_aspect_ratio).round() as u32;
+
+                // Limpa o estado de tamanho pendente anterior para evitar conflito
+                self.pending_size = Some((new_width, new_height));
+                let _ = renderer
+                    .window
+                    .request_inner_size(winit::dpi::PhysicalSize::new(new_width, new_height));
+
+                // Atualiza o layout com o tamanho físico atual da transição
+                self.resize_layout(size.width, size.height);
             }
             return;
         }
@@ -635,15 +703,23 @@ impl App {
         if self.chess_game.is_some() {
             // Sair do xadrez:
             self.chess_game = None;
-            // Restaurar proporção de tela original 4:3 (800 / 600)
-            self.target_aspect_ratio = BASE_WIDTH / BASE_HEIGHT;
+
+            // 1. RESTAURE A PROPORÇÃO E O TAMANHO SALVOS ANTERIORMENTE:
+            self.target_aspect_ratio = self.saved_target_aspect_ratio;
+            self.last_width = self.saved_width;
+            self.last_height = self.saved_height;
             if let Some(ref renderer) = self.renderer {
-                let size = renderer.window.inner_size();
-                // Calcula a nova largura baseada na altura mantendo a proporção 4:3
-                let new_w = (size.height as f32 * self.target_aspect_ratio).round() as u32;
-                let _ = renderer.window.request_inner_size(winit::dpi::PhysicalSize::new(new_w, size.height));
-                self.pending_size = Some((new_w, size.height));
+                self.pending_size = Some((self.saved_width, self.saved_height));
+                let _ = renderer
+                    .window
+                    .request_inner_size(winit::dpi::PhysicalSize::new(
+                        self.saved_width,
+                        self.saved_height,
+                    ));
             }
+            // 2. FORCE O RECALCULO IMEDIATO DO LAYOUT
+            // Evita que a interface renderize quebrada enquanto o OS processa o resize
+            self.resize_layout(self.saved_width, self.saved_height);
             return;
         }
 
@@ -861,6 +937,16 @@ impl ApplicationHandler for App {
                         }
                     } else {
                         self.pressed_arrow = None;
+                        // Se o resize falhou no clique inicial, ele será executado aqui com sucesso instantâneo!
+                        if self.chess_game.is_some() {
+                            if let Some((pw, ph)) = self.pending_size {
+                                if let Some(ref renderer) = self.renderer {
+                                    let _ = renderer
+                                        .window
+                                        .request_inner_size(winit::dpi::PhysicalSize::new(pw, ph));
+                                }
+                            }
+                        }
                     }
                 }
                 if let Some(ref renderer) = self.renderer {
@@ -901,8 +987,8 @@ impl ApplicationHandler for App {
 
         if let Some(ref m) = monitor {
             let size = m.size();
-            init_width = (size.width as f32 * 0.35) as u32;
-            init_height = (size.height as f32 * 0.35) as u32;
+            init_width = (size.width as f32 * 0.27) as u32;
+            init_height = (size.height as f32 * 0.27) as u32;
             self.target_aspect_ratio = size.width as f32 / size.height as f32;
             self.last_monitor_name = m.name();
         }

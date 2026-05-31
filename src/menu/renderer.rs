@@ -703,7 +703,13 @@ impl Renderer {
 pub fn carregar_png_ou_fallback(caminho: &str, cor_fallback: [u8; 4]) -> image::RgbaImage {
     match image::open(caminho) {
         Ok(img) => img.to_rgba8(),
-        Err(_) => {
+        Err(e) => {
+            println!(
+                "⚠️ Erro ao carregar '{}': {:?}\n   Procurando em: {:?}",
+                caminho,
+                e,
+                std::env::current_dir()
+            );
             // Ícone geométrico 64×64: borda + "×" diagonal centrado
             let mut img = image::RgbaImage::new(64, 64);
             for (x, y, pixel) in img.enumerate_pixels_mut() {
