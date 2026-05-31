@@ -1,35 +1,15 @@
-// Demo simples de um menu em carrossel interativo construído com a WGPU (WebGPU para Rust).
-//
-// O objetivo deste arquivo é demonstrar na prática como criar uma interface gráfica 2D
-// interativa, com suporte a mouse, teclado, animações de transição suaves e menus aninhados (submenus).
-// Este código foi projetado para ser didático, modular, limpo e extremamente fácil de estender.
+// Demo de menu em carrossel interativo construído com WGPU.
 //
 // =========================================================================================
 //          ESTRATÉGIA DE PROPORCIONALIDADE (Viewport + Escala Lógica)
 // =========================================================================================
 //
-// A abordagem correta para manter proporções é NÃO brigar com o gerenciador de janelas.
-// Em vez disso, usamos um VIEWPORT que define uma sub-região da janela onde desenhamos.
-//
-// Como funciona:
-//
-// [1] O usuário pode redimensionar a janela como quiser (livre, sem restrições).
-//
-// [2] Em todo resize, calculamos o VIEWPORT PROPORCIONAL:
-//     - Pegamos a proporção alvo (aspect ratio do monitor, ex: 16/9)
-//     - Calculamos o maior retângulo com essa proporção que cabe na janela atual
-//     - Centramos esse retângulo na janela
-//     → Isso cria barras pretas automáticas (letterbox/pillarbox) quando necessário
-//
-// [3] O uniform `screen_size` da GPU é sempre as dimensões LÓGICAS do viewport
-//     (não da janela física). Isso garante que o shader converta pixels → clip space
-//     corretamente, independentemente do tamanho da janela.
-//
-// [4] O scale_factor de renderização é viewport_width / BASE_WIDTH.
-//     Todos os quadrados, botões e elementos escalam juntos.
-//
-// [5] Coordenadas do mouse são convertidas do espaço físico da janela para o espaço
-//     lógico do viewport antes dos testes de colisão.
+// [1] O usuário redimensiona a janela livremente.
+// [2] Calculamos um VIEWPORT PROPORCIONAL (maior retângulo que cabe na janela),
+//     centramos e criamos barras pretas (letterbox/pillarbox) automaticamente.
+// [3] O uniform `screen_size` é sempre as dimensões LÓGICAS do viewport.
+// [4] scale_factor = viewport_width / BASE_WIDTH — todos os elementos escalam juntos.
+// [5] Coordenadas do mouse são convertidas do espaço físico para o lógico.
 //
 // =========================================================================================
 
@@ -42,17 +22,30 @@ use winit::{
     window::Window,
 };
 
-// Importa o renderizador 2D definido no módulo irmão 'renderer'.
-use super::renderer::{Renderer, Viewport};
-// Importa os tipos de dados do módulo 'types'.
+use super::renderer::{Renderer, Texture, Viewport, carregar_png_ou_fallback, rasterizar_texto};
 use super::types::{ArrowButton, ArrowId, MenuItem, MenuState};
+use super::chess::ChessGame;
 
 // Resolução lógica base do design (independente do monitor).
-// Todo o layout é projetado para estas dimensões e escalado proporcionalmente.
 const BASE_WIDTH: f32 = 800.0;
 const BASE_HEIGHT: f32 = 600.0;
 
-/// **O que é:** O núcleo central do nosso aplicativo.
+// =============================================================================
+//  Textura de ícone gerada uma vez e reutilizada em todos os frames
+// =============================================================================
+struct IconeItem {
+    /// Bind group da textura GPU deste item — compartilhado via Arc
+    bind_group: Arc<wgpu::BindGroup>,
+    /// Bind group da textura do rótulo de texto (label)
+    label_bind_group: Arc<wgpu::BindGroup>,
+    /// Dimensões do rótulo em pixels lógicos (para calcular a posição centralizada)
+    label_w: f32,
+    label_h: f32,
+}
+
+// =============================================================================
+//  Núcleo do Aplicativo
+// =============================================================================
 pub struct App {
     renderer: Option<Renderer>,
     menu_stack: Vec<MenuState>,
@@ -64,53 +57,95 @@ pub struct App {
     pressed_arrow: Option<ArrowId>,
 
     // --- VIEWPORT E PROPORCIONALIDADE ---
-    // O viewport é a região da janela física onde desenhamos (preserva proporção do monitor).
     viewport: Viewport,
-    // Proporção alvo derivada do monitor ativo (largura / altura).
     target_aspect_ratio: f32,
-    // Nome do monitor atual para detectar cruzamentos de tela (Multi-Monitor).
     last_monitor_name: Option<String>,
 
-    // --- RASTREAMENTO DE RESIZE PROPORCIONAL DA JANELA ---
-    // Dimensões do último resize processado (para detectar qual eixo mudou mais).
+    // --- RASTREAMENTO DE RESIZE PROPORCIONAL ---
     last_width: u32,
     last_height: u32,
-    // Tamanho que nós mesmos requisitamos via request_inner_size.
-    // Enquanto pending_size != None, ignoramos o próximo Resized (é o SO confirmando nossa requisição).
     pending_size: Option<(u32, u32)>,
+
+    // --- ASSETS PRÉ-CARREGADOS ---
+    // Ícones e rótulos de texto são gerados uma vez no `resumed` e reutilizados
+    icones: Vec<IconeItem>,     // Um por item no nível raiz
+    icones_sub: Vec<IconeItem>, // Ícones dos submenus (gerados ao entrar no submenu)
+
+    // --- TELA DE JOGO ---
+    chess_game: Option<ChessGame>,
 }
 
 impl App {
     pub fn new() -> Self {
-        // Árvore de menus para navegação.
         let root_items = vec![
             MenuItem {
                 id: "apps",
                 label: "Apps",
                 children: Some(vec![
-                    MenuItem { id: "calc", label: "Calc", children: None },
-                    MenuItem { id: "paint", label: "Paint", children: None },
-                    MenuItem { id: "notes", label: "Notes", children: None },
+                    MenuItem {
+                        id: "calc",
+                        label: "Calc",
+                        children: None,
+                    },
+                    MenuItem {
+                        id: "paint",
+                        label: "Paint",
+                        children: None,
+                    },
+                    MenuItem {
+                        id: "notes",
+                        label: "Notes",
+                        children: None,
+                    },
                 ]),
             },
             MenuItem {
                 id: "games",
                 label: "Games",
                 children: Some(vec![
-                    MenuItem { id: "puzzle", label: "Puzzle", children: None },
-                    MenuItem { id: "racer", label: "Racer", children: None },
-                    MenuItem { id: "arcade", label: "Arcade", children: None },
+                    MenuItem {
+                        id: "chess",
+                        label: "Chess",
+                        children: None,
+                    },
+                    MenuItem {
+                        id: "puzzle",
+                        label: "Puzzle",
+                        children: None,
+                    },
+                    MenuItem {
+                        id: "racer",
+                        label: "Racer",
+                        children: None,
+                    },
+                    MenuItem {
+                        id: "arcade",
+                        label: "Arcade",
+                        children: None,
+                    },
                 ]),
             },
             MenuItem {
                 id: "tools",
                 label: "Tools",
                 children: Some(vec![
-                    MenuItem { id: "terminal", label: "Terminal", children: None },
-                    MenuItem { id: "editor", label: "Editor", children: None },
+                    MenuItem {
+                        id: "terminal",
+                        label: "Terminal",
+                        children: None,
+                    },
+                    MenuItem {
+                        id: "editor",
+                        label: "Editor",
+                        children: None,
+                    },
                 ]),
             },
-            MenuItem { id: "about", label: "About", children: None },
+            MenuItem {
+                id: "about",
+                label: "About",
+                children: None,
+            },
         ];
 
         Self {
@@ -120,32 +155,126 @@ impl App {
             mouse_pos: (0.0, 0.0),
             hovered_arrow: None,
             pressed_arrow: None,
-            viewport: Viewport { x: 0.0, y: 0.0, width: BASE_WIDTH, height: BASE_HEIGHT },
-            target_aspect_ratio: BASE_WIDTH / BASE_HEIGHT, // Fallback inicial (4:3 aproximado)
+            viewport: Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: BASE_WIDTH,
+                height: BASE_HEIGHT,
+            },
+            target_aspect_ratio: BASE_WIDTH / BASE_HEIGHT,
             last_monitor_name: None,
             last_width: BASE_WIDTH as u32,
             last_height: BASE_HEIGHT as u32,
             pending_size: None,
+            icones: Vec::new(),
+            icones_sub: Vec::new(),
+            chess_game: None,
         }
     }
 
-    /// Calcula o viewport proporcional e atualiza o layout dos botões.
+    /// Carrega a fonte do sistema — tenta locais comuns de fontes no Windows, macOS e Linux.
+    /// Se nenhuma for encontrada, usa a fonte embutida (Inconsolata) do ab_glyph.
+    fn carregar_fonte() -> ab_glyph::FontArc {
+        let candidatas = [
+            // Local (pasta assets/ do projeto) — tem prioridade
+            "assets/font.ttf",
+            // Windows
+            "C:/Windows/Fonts/segoeui.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+            // macOS
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/Library/Fonts/Arial.ttf",
+            // Linux
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ];
+
+        for caminho in &candidatas {
+            if let Ok(dados) = std::fs::read(caminho) {
+                if let Ok(font) = ab_glyph::FontArc::try_from_vec(dados) {
+                    return font;
+                }
+            }
+        }
+
+        // Nenhuma fonte do sistema encontrada — orienta o usuário a colocar uma em assets/
+        panic!(
+            "Nenhuma fonte encontrada. Coloque um arquivo .ttf em: assets/font.ttf\n\
+             Baixe qualquer fonte gratuita (ex: Inter, Roboto) e salve com esse nome."
+        )
+    }
+
+    /// Gera os `IconeItem`s para uma lista de itens de menu.
     ///
-    /// Dado o tamanho físico da janela (window_w x window_h) e a proporção alvo,
-    /// encontra o maior retângulo proporcional que cabe na janela e o centra.
-    /// Também atualiza o uniform screen_size da GPU com as dimensões LÓGICAS do viewport.
+    /// Para cada item:
+    ///  - Carrega o PNG de `assets/{id}.png` (ou gera um fallback colorido)
+    ///  - Rasteriza o rótulo de texto como textura
+    fn gerar_icones(
+        items: &[MenuItem],
+        renderer: &Renderer,
+        font: &ab_glyph::FontArc,
+    ) -> Vec<IconeItem> {
+        // Paleta de cores fallback para ícones sem PNG
+        let cores_fallback: &[[u8; 4]] = &[
+            [100, 180, 255, 255], // azul
+            [255, 160, 80, 255],  // laranja
+            [120, 220, 120, 255], // verde
+            [220, 120, 220, 255], // roxo
+            [255, 220, 80, 255],  // amarelo
+        ];
+
+        items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                // --- Ícone PNG ---
+                let cor_fb = cores_fallback[i % cores_fallback.len()];
+                let caminho_png = format!("assets/{}.png", item.id);
+                let img_icone = carregar_png_ou_fallback(&caminho_png, cor_fb);
+                let tex_icone = Texture::from_image_buffer(
+                    &renderer.device,
+                    &renderer.queue,
+                    &img_icone,
+                    &renderer.texture_bind_group_layout,
+                    &format!("icone_{}", item.id),
+                );
+
+                // --- Rótulo de texto ---
+                // Escala de 32px é boa para o carrossel (a UI inteira escala pelo scale_factor)
+                let img_label = rasterizar_texto(font, item.label, 32.0, [1.0, 1.0, 1.0, 1.0]);
+                let label_w = img_label.width() as f32;
+                let label_h = img_label.height() as f32;
+                let tex_label = Texture::from_image_buffer(
+                    &renderer.device,
+                    &renderer.queue,
+                    &img_label,
+                    &renderer.texture_bind_group_layout,
+                    &format!("label_{}", item.id),
+                );
+
+                IconeItem {
+                    bind_group: tex_icone.bind_group,
+                    label_bind_group: tex_label.bind_group,
+                    label_w,
+                    label_h,
+                }
+            })
+            .collect()
+    }
+
+    // -------------------------------------------------------------------------
+    //  Layout & Física
+    // -------------------------------------------------------------------------
+
     fn resize_layout(&mut self, window_w: u32, window_h: u32) {
         let win_w = window_w as f32;
         let win_h = window_h as f32;
         let ratio = self.target_aspect_ratio;
 
-        // Calcula o viewport proporcional (maior retângulo com a proporção alvo dentro da janela)
         let (vp_w, vp_h) = if win_w / win_h > ratio {
-            // Janela mais larga que o necessário → pillarbox (barras nas laterais)
-            (win_h * ratio, win_h)
+            (win_h * ratio, win_h) // pillarbox (barras laterais)
         } else {
-            // Janela mais alta que o necessário → letterbox (barras em cima/baixo)
-            (win_w, win_w / ratio)
+            (win_w, win_w / ratio) // letterbox (barras em cima/baixo)
         };
 
         let vp_x = (win_w - vp_w) * 0.5;
@@ -158,51 +287,56 @@ impl App {
             height: vp_h,
         };
 
-        // O scale_factor é calculado com base no viewport lógico (não na janela física).
-        // BASE_WIDTH/BASE_HEIGHT representam as dimensões do design original.
-        // O conteúdo escala uniformemente em ambos os eixos (sem distorção).
         let scale_factor = vp_w / BASE_WIDTH;
 
-        // Atualiza o uniform da GPU com as dimensões LÓGICAS do viewport.
-        // O shader usará isso para converter pixels → clip space corretamente.
         if let Some(ref mut renderer) = self.renderer {
             renderer.update_logical_size(vp_w, vp_h);
         }
 
-        // Seta esquerda: posicionada na lateral esquerda, centralizada verticalmente.
         let left_w = 50.0 * scale_factor;
         let left_h = 50.0 * scale_factor;
         let left_x = 80.0 * scale_factor;
         let left_y = (vp_h * 0.5) - (left_h * 0.5);
 
-        // Seta direita: posicionada perto da borda direita, centralizada verticalmente.
         let right_w = 50.0 * scale_factor;
         let right_h = 50.0 * scale_factor;
         let right_x = vp_w - (80.0 * scale_factor) - right_w;
         let right_y = (vp_h * 0.5) - (right_h * 0.5);
 
-        // Botão de voltar: posicionado no canto superior esquerdo.
         let back_w = 40.0 * scale_factor;
         let back_h = 40.0 * scale_factor;
         let back_x = 20.0 * scale_factor;
         let back_y = 20.0 * scale_factor;
 
         self.arrows = vec![
-            ArrowButton { id: ArrowId::Left, x: left_x, y: left_y, w: left_w, h: left_h },
-            ArrowButton { id: ArrowId::Right, x: right_x, y: right_y, w: right_w, h: right_h },
-            ArrowButton { id: ArrowId::Back, x: back_x, y: back_y, w: back_w, h: back_h },
+            ArrowButton {
+                id: ArrowId::Left,
+                x: left_x,
+                y: left_y,
+                w: left_w,
+                h: left_h,
+            },
+            ArrowButton {
+                id: ArrowId::Right,
+                x: right_x,
+                y: right_y,
+                w: right_w,
+                h: right_h,
+            },
+            ArrowButton {
+                id: ArrowId::Back,
+                x: back_x,
+                y: back_y,
+                w: back_w,
+                h: back_h,
+            },
         ];
     }
 
-    /// Converte coordenadas físicas do mouse (relativas à janela) para coordenadas
-    /// lógicas do viewport (relativas à área de desenho).
     fn physical_to_logical(&self, px: f32, py: f32) -> (f32, f32) {
-        let lx = px - self.viewport.x;
-        let ly = py - self.viewport.y;
-        (lx, ly)
+        (px - self.viewport.x, py - self.viewport.y)
     }
 
-    /// Lógica matemática de atualização temporal de frame (animação de transição).
     fn update(&mut self) {
         if let Some(menu) = self.menu_stack.last_mut() {
             if menu.animating {
@@ -216,10 +350,10 @@ impl App {
         }
     }
 
-    /// Renderiza o frame atual.
-    ///
-    /// Todo o código de desenho usa coordenadas em pixels LÓGICOS do viewport.
-    /// O scale_factor é viewport_width / BASE_WIDTH — todos os elementos escalam juntos.
+    // -------------------------------------------------------------------------
+    //  Renderização
+    // -------------------------------------------------------------------------
+
     fn render(&mut self) -> anyhow::Result<()> {
         let renderer = match &mut self.renderer {
             Some(r) => r,
@@ -230,25 +364,175 @@ impl App {
 
         let vp_w = renderer.uniforms.screen_size[0];
         let vp_h = renderer.uniforms.screen_size[1];
-
-        // Fator de escala uniforme: viewport_width / largura base do design
         let scale_factor = vp_w / BASE_WIDTH;
 
-        // 1. Fundo da área de conteúdo
-        renderer.draw_rect(0.0, 0.0, vp_w, vp_h, [0.12, 0.12, 0.15, 1.0]);
+        // 1. Fundo gradiente simulado com dois retângulos sobrepostos
+        renderer.draw_rect(0.0, 0.0, vp_w, vp_h, [0.08, 0.08, 0.12, 1.0]);
+        renderer.draw_rect(0.0, vp_h * 0.5, vp_w, vp_h * 0.5, [0.10, 0.10, 0.16, 1.0]);
 
-        // 2. Barra superior
-        let top_bar_height = 60.0 * scale_factor;
-        renderer.draw_rect(0.0, 0.0, vp_w, top_bar_height, [0.15, 0.15, 0.18, 1.0]);
-        renderer.draw_rect(0.0, top_bar_height - (2.0 * scale_factor), vp_w, 2.0 * scale_factor, [0.3, 0.5, 0.9, 0.8]);
+        // 2. Barra superior com linha decorativa
+        let top_bar_h = 60.0 * scale_factor;
+        renderer.draw_rect(0.0, 0.0, vp_w, top_bar_h, [0.13, 0.13, 0.18, 1.0]);
+        renderer.draw_rect(
+            0.0,
+            top_bar_h - 2.0 * scale_factor,
+            vp_w,
+            2.0 * scale_factor,
+            [0.3, 0.5, 0.9, 0.9],
+        );
 
-        // 3. Setas clicáveis
+        if let Some(ref game) = self.chess_game {
+            // Renderiza apenas o tabuleiro de xadrez e o cursor
+            game.render(renderer, vp_w, vp_h)?;
+
+            // Renderiza o botão de voltar no canto superior esquerdo
+            for arrow in &self.arrows {
+                if arrow.id == ArrowId::Back {
+                    let is_hovered = self.hovered_arrow == Some(arrow.id);
+                    let is_pressed = self.pressed_arrow == Some(arrow.id);
+
+                    let color = if is_pressed {
+                        [0.2, 0.6, 1.0, 1.0]
+                    } else if is_hovered {
+                        [0.4, 0.7, 1.0, 1.0]
+                    } else {
+                        [0.2, 0.3, 0.5, 1.0]
+                    };
+
+                    desenhar_seta_botao(
+                        renderer, arrow.id, arrow.x, arrow.y, arrow.w, arrow.h, color,
+                    );
+                }
+            }
+
+            // Cursor customizado (ponto amarelo)
+            let cursor_size = 8.0 * scale_factor;
+            renderer.draw_rect(
+                self.mouse_pos.0 - cursor_size * 0.5,
+                self.mouse_pos.1 - cursor_size * 0.5,
+                cursor_size,
+                cursor_size,
+                [1.0, 0.9, 0.0, 0.9],
+            );
+
+            renderer.present(self.viewport)?;
+            return Ok(());
+        }
+
+        // 3. Detecção de hover dos botões (calculado aqui, desenhado após o carrossel)
         let mut hovered_arrow = None;
         for arrow in &self.arrows {
-            let is_hovered = arrow.contains(self.mouse_pos.0, self.mouse_pos.1);
-            if is_hovered {
+            if arrow.contains(self.mouse_pos.0, self.mouse_pos.1) {
                 hovered_arrow = Some(arrow.id);
             }
+        }
+        self.hovered_arrow = hovered_arrow;
+
+        // 4. Carrossel de menu
+        let cx = vp_w * 0.5;
+        let cy = vp_h * 0.5;
+        let base_size = 120.0 * scale_factor;
+        let gap = 160.0 * scale_factor;
+
+        // Determina qual conjunto de ícones usar (raiz ou submenu)
+        let profundidade = self.menu_stack.len();
+        let icones_ativos = if profundidade == 1 {
+            &self.icones
+        } else {
+            &self.icones_sub
+        };
+
+        if let Some(menu) = self.menu_stack.last() {
+            let selected_f = menu.selected_float();
+
+            for (i, _item) in menu.items.iter().enumerate() {
+                let d = i as f32 - selected_f;
+                if d.abs() > 3.0 {
+                    continue;
+                }
+
+                // Cartões laterais ficam menores (profundidade de foco)
+                let escala = (1.0 - d.abs() * 0.18).clamp(0.6, 1.0);
+                let size = base_size * escala;
+                let x = cx + d * gap - size * 0.5;
+                let y = cy - size * 0.5;
+
+                let is_center = d.abs() < 0.5;
+
+                // Sombra do cartão (retângulo levemente deslocado e escurecido)
+                renderer.draw_rect(x + 4.0, y + 4.0, size, size, [0.0, 0.0, 0.0, 0.4]);
+
+                // Fundo do cartão
+                let cor_fundo = if is_center {
+                    [0.18, 0.18, 0.25, 1.0]
+                } else {
+                    [0.13, 0.13, 0.18, 1.0]
+                };
+                renderer.draw_rect(x, y, size, size, cor_fundo);
+
+                // Ícone PNG texturizado (se disponível)
+                if let Some(icone) = icones_ativos.get(i) {
+                    let padding = size * 0.1;
+                    let tint = if is_center {
+                        [1.0, 1.0, 1.0, 1.0]
+                    } else {
+                        [0.6, 0.6, 0.7, 1.0]
+                    };
+                    renderer.draw_textured_rect(
+                        x + padding,
+                        y + padding,
+                        size - padding * 2.0,
+                        size - padding * 2.0,
+                        tint,
+                        [0.0, 0.0, 1.0, 1.0],
+                        icone.bind_group.clone(),
+                    );
+
+                    // Rótulo de texto abaixo do cartão (centralizado)
+                    let label_scale = escala * scale_factor;
+                    let lw = icone.label_w * label_scale;
+                    let lh = icone.label_h * label_scale;
+                    let label_x = x + size * 0.5 - lw * 0.5;
+                    let label_y = y + size + 6.0 * scale_factor;
+                    let label_alpha = if is_center { 1.0 } else { 0.5 };
+                    renderer.draw_textured_rect(
+                        label_x,
+                        label_y,
+                        lw,
+                        lh,
+                        [1.0, 1.0, 1.0, label_alpha],
+                        [0.0, 0.0, 1.0, 1.0],
+                        icone.label_bind_group.clone(),
+                    );
+                }
+
+                // Indicador de submenu (quadradinho branco no canto)
+                if _item.children.is_some() {
+                    let ind = 10.0 * scale_factor;
+                    let pad = 5.0 * scale_factor;
+                    renderer.draw_rect(
+                        x + size - ind - pad,
+                        y + pad,
+                        ind,
+                        ind,
+                        [1.0, 1.0, 1.0, 0.9],
+                    );
+                }
+
+                // Borda do cartão focado
+                if is_center {
+                    let borda = 2.0 * scale_factor;
+                    renderer.draw_rect(x, y, size, borda, [0.3, 0.6, 1.0, 0.8]); // cima
+                    renderer.draw_rect(x, y + size - borda, size, borda, [0.3, 0.6, 1.0, 0.8]); // baixo
+                    renderer.draw_rect(x, y, borda, size, [0.3, 0.6, 1.0, 0.8]); // esq
+                    renderer.draw_rect(x + size - borda, y, borda, size, [0.3, 0.6, 1.0, 0.8]); // dir
+                }
+            }
+        }
+
+        // 5. Botões de seta — desenhados DEPOIS do carrossel para ficarem sempre na frente
+        for arrow in &self.arrows {
+            let is_hovered = self.hovered_arrow == Some(arrow.id);
             let is_pressed = self.pressed_arrow == Some(arrow.id);
 
             let color = if is_pressed {
@@ -259,71 +543,29 @@ impl App {
                 [0.2, 0.3, 0.5, 1.0]
             };
 
-            renderer.draw_rect(arrow.x, arrow.y, arrow.w, arrow.h, color);
-        }
-        self.hovered_arrow = hovered_arrow;
-
-        // 4. Carrossel de menu — escala com o viewport
-        let cx = vp_w * 0.5;
-        let cy = vp_h * 0.5;
-
-        let base_size = 120.0 * scale_factor;
-        let gap = 160.0 * scale_factor;
-
-        if let Some(menu) = self.menu_stack.last() {
-            let selected_f = menu.selected_float();
-
-            for (i, item) in menu.items.iter().enumerate() {
-                let d = i as f32 - selected_f;
-                if d.abs() > 3.0 {
-                    continue;
-                }
-
-                // Reduz suavemente cartões distantes do centro para dar profundidade de foco
-                let scale = (1.0 - d.abs() * 0.18).clamp(0.6, 1.0);
-                let size = base_size * scale;
-
-                let x = cx + d * gap - size * 0.5;
-                let y = cy - size * 0.5;
-
-                let is_center = d.abs() < 0.5;
-                let color = if is_center {
-                    [0.9, 0.5, 0.1, 1.0] // Laranja neon para o focado
-                } else {
-                    [0.2, 0.5, 0.7, 1.0] // Azul suave para os laterais
-                };
-
-                renderer.draw_rect(x, y, size, size, color);
-
-                if item.children.is_some() {
-                    let indicator_size = 12.0 * scale_factor;
-                    let padding = 6.0 * scale_factor;
-                    renderer.draw_rect(
-                        x + size - indicator_size - padding,
-                        y + padding,
-                        indicator_size,
-                        indicator_size,
-                        [1.0, 1.0, 1.0, 0.8],
-                    );
-                }
-            }
+            desenhar_seta_botao(
+                renderer, arrow.id, arrow.x, arrow.y, arrow.w, arrow.h, color,
+            );
         }
 
-        // 5. Cursor de mouse (em coordenadas lógicas)
+        // 6. Cursor customizado (ponto amarelo)
         let cursor_size = 8.0 * scale_factor;
         renderer.draw_rect(
             self.mouse_pos.0 - cursor_size * 0.5,
             self.mouse_pos.1 - cursor_size * 0.5,
             cursor_size,
             cursor_size,
-            [1.0, 0.9, 0.0, 0.8],
+            [1.0, 0.9, 0.0, 0.9],
         );
 
         renderer.present(self.viewport)?;
         Ok(())
     }
 
-    /// Move a seleção do menu e ativa a transição suave de deslize.
+    // -------------------------------------------------------------------------
+    //  Lógica de Navegação
+    // -------------------------------------------------------------------------
+
     fn move_selection(&mut self, delta: i32) {
         if let Some(menu) = self.menu_stack.last_mut() {
             if menu.animating {
@@ -344,26 +586,145 @@ impl App {
         }
     }
 
-    /// Tenta acessar o submenu do item central de foco.
     fn try_enter_submenu(&mut self) {
-        if let Some(menu) = self.menu_stack.last() {
+        // Captura os dados necessários antes de emprestar self mutavelmente
+        let (children, items_clone, item_id) = {
+            let menu = match self.menu_stack.last() {
+                Some(m) => m,
+                None => return,
+            };
             let idx = menu.selected as usize;
-            if let Some(item) = menu.items.get(idx) {
-                if let Some(children) = item.children.clone() {
-                    self.menu_stack.push(MenuState::new(children));
+            let item = match menu.items.get(idx) {
+                Some(i) => i,
+                None => return,
+            };
+            match &item.children {
+                Some(ch) => (true, ch.clone(), item.id),
+                None => (false, vec![], item.id),
+            }
+        };
+
+        if item_id == "chess" {
+            // Entrar no jogo de xadrez:
+            // 1. Instanciar o jogo
+            self.chess_game = Some(ChessGame::new());
+            // 2. Definir a proporção alvo como quadrada (1.0)
+            self.target_aspect_ratio = 1.0;
+            // 3. Requisitar que a janela fique quadrada
+            if let Some(ref renderer) = self.renderer {
+                let size = renderer.window.inner_size();
+                // Tornamos a largura igual à altura para ficar quadrado
+                let min_dim = size.width.min(size.height);
+                let _ = renderer.window.request_inner_size(winit::dpi::PhysicalSize::new(min_dim, min_dim));
+                self.pending_size = Some((min_dim, min_dim));
+            }
+            return;
+        }
+
+        if children {
+            // Gera os ícones do submenu antes de empurrar o estado
+            if let Some(renderer) = &self.renderer {
+                let font = Self::carregar_fonte();
+                self.icones_sub = Self::gerar_icones(&items_clone, renderer, &font);
+            }
+            self.menu_stack.push(MenuState::new(items_clone));
+        }
+    }
+
+    fn pop_menu(&mut self) {
+        if self.chess_game.is_some() {
+            // Sair do xadrez:
+            self.chess_game = None;
+            // Restaurar proporção de tela original 4:3 (800 / 600)
+            self.target_aspect_ratio = BASE_WIDTH / BASE_HEIGHT;
+            if let Some(ref renderer) = self.renderer {
+                let size = renderer.window.inner_size();
+                // Calcula a nova largura baseada na altura mantendo a proporção 4:3
+                let new_w = (size.height as f32 * self.target_aspect_ratio).round() as u32;
+                let _ = renderer.window.request_inner_size(winit::dpi::PhysicalSize::new(new_w, size.height));
+                self.pending_size = Some((new_w, size.height));
+            }
+            return;
+        }
+
+        if self.menu_stack.len() > 1 {
+            self.menu_stack.pop();
+            self.icones_sub.clear();
+        }
+    }
+
+    fn back_menu(&mut self, event_loop: &ActiveEventLoop) {
+        if self.chess_game.is_some() {
+            self.pop_menu();
+            return;
+        }
+
+        if self.menu_stack.len() > 1 {
+            self.menu_stack.pop();
+            self.icones_sub.clear();
+        } else {
+            event_loop.exit();
+        }
+    }
+
+    /// Detecta qual cartão do carrossel contém o ponto (px, py) em pixels lógicos.
+    ///
+    /// Retorna o índice do item clicado dentro de `menu.items`.
+    /// Usa a mesma geometria do `render()` para garantir consistência.
+    ///
+    /// Quando cartões se sobrepõem (ex: d=±1 sobre d=±2), prefere sempre
+    /// o cartão mais próximo do centro (menor |d|), que é o que o usuário vê na frente.
+    fn card_hit_test(&self, px: f32, py: f32) -> Option<usize> {
+        let renderer = self.renderer.as_ref()?;
+        let vp_w = renderer.uniforms.screen_size[0];
+        let vp_h = renderer.uniforms.screen_size[1];
+        let scale_factor = vp_w / BASE_WIDTH;
+
+        let cx = vp_w * 0.5;
+        let cy = vp_h * 0.5;
+        let base_size = 120.0 * scale_factor;
+        let gap = 160.0 * scale_factor;
+
+        let menu = self.menu_stack.last()?;
+
+        // Durante animação usamos o destino final para calcular as posições,
+        // mas bloqueamos cliques para evitar entradas acidentais.
+        if menu.animating {
+            return None;
+        }
+
+        let selected_f = menu.selected as f32; // posição estável (sem anim)
+
+        let mut melhor_idx: Option<usize> = None;
+        let mut melhor_d_abs = f32::MAX;
+
+        for (i, _) in menu.items.iter().enumerate() {
+            let d = i as f32 - selected_f;
+            if d.abs() > 3.0 {
+                continue;
+            }
+
+            let scale = (1.0 - d.abs() * 0.18).clamp(0.6, 1.0);
+            let size = base_size * scale;
+            let x = cx + d * gap - size * 0.5;
+            let y = cy - size * 0.5;
+
+            if px >= x && px <= x + size && py >= y && py <= y + size {
+                // Prefere o cartão mais próximo do centro (fica "na frente" visualmente)
+                if d.abs() < melhor_d_abs {
+                    melhor_d_abs = d.abs();
+                    melhor_idx = Some(i);
                 }
             }
         }
-    }
 
-    /// Retorna ao menu superior e desempilha a visualização atual.
-    fn pop_menu(&mut self) {
-        if self.menu_stack.len() > 1 {
-            self.menu_stack.pop();
-        }
+        melhor_idx
     }
 }
 
+// =============================================================================
+//  ApplicationHandler — Loop de Eventos do Winit
+// =============================================================================
 impl ApplicationHandler for App {
     fn window_event(
         &mut self,
@@ -374,64 +735,49 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
-            // Quando a janela é redimensionada:
-            //   1. Se for uma confirmação do SO do nosso próprio request_inner_size → processa normalmente.
-            //   2. Se for resize iniciado pelo usuário → calcula o tamanho correto proporcional,
-            //      requisita uma vez via request_inner_size e retorna (aguarda confirmação do SO).
-            // Isso garante que a janela sempre mantenha a proporção do monitor, sem loops infinitos.
+            // Resize com preservação de proporção:
+            //   - Se for confirmação do nosso próprio request_inner_size → processa normalmente.
+            //   - Se for resize do usuário → calcula o tamanho correto e requisita uma vez.
             WindowEvent::Resized(size) => {
-                if size.width == 0 || size.height == 0 {
-                    return;
-                }
-                if self.renderer.is_none() {
+                if size.width == 0 || size.height == 0 || self.renderer.is_none() {
                     return;
                 }
 
-                // Verifica se este Resized é o SO confirmando nossa requisição pendente.
-                // Usa tolerância de ±2px para lidar com arredondamentos do SO.
-                let is_our_own_request = self.pending_size.map(|(pw, ph)| {
-                    (size.width as i32 - pw as i32).abs() <= 2
-                        && (size.height as i32 - ph as i32).abs() <= 2
-                }).unwrap_or(false);
+                let is_our_own_request = self
+                    .pending_size
+                    .map(|(pw, ph)| {
+                        (size.width as i32 - pw as i32).abs() <= 2
+                            && (size.height as i32 - ph as i32).abs() <= 2
+                    })
+                    .unwrap_or(false);
 
                 if is_our_own_request {
-                    // É a confirmação da nossa requisição — processa normalmente.
                     self.pending_size = None;
                 } else {
-                    // É um resize iniciado pelo usuário.
-                    // Detecta qual eixo mudou mais para saber qual fixar como referência.
                     let dw = (size.width as i32 - self.last_width as i32).abs();
                     let dh = (size.height as i32 - self.last_height as i32).abs();
-
                     let ratio = self.target_aspect_ratio;
+
                     let (new_w, new_h) = if dw >= dh {
-                        // Usuário puxou mais na horizontal → fixa a largura e ajusta a altura.
                         let h = (size.width as f32 / ratio).round() as u32;
                         (size.width, h.max(1))
                     } else {
-                        // Usuário puxou mais na vertical → fixa a altura e ajusta a largura.
                         let w = (size.height as f32 * ratio).round() as u32;
                         (w.max(1), size.height)
                     };
 
-                    // Só requisita correção se as dimensões realmente precisam mudar.
                     if new_w != size.width || new_h != size.height {
                         if let Some(ref renderer) = self.renderer {
-                            let _ = renderer.window.request_inner_size(
-                                winit::dpi::PhysicalSize::new(new_w, new_h)
-                            );
+                            let _ = renderer
+                                .window
+                                .request_inner_size(winit::dpi::PhysicalSize::new(new_w, new_h));
                         }
-                        // Registra o tamanho requisitado para identificar a confirmação do SO.
                         self.pending_size = Some((new_w, new_h));
-                        // Atualiza last_width/height com o tamanho atual (para o próximo delta).
                         self.last_width = size.width;
                         self.last_height = size.height;
-                        // Ainda configura a superfície e o layout com o tamanho atual
-                        // (o viewport letterbox garante que não haverá distorção visual no frame intermediário).
                     }
                 }
 
-                // Reconfigura a superfície WGPU com as dimensões físicas confirmadas pelo SO.
                 if let Some(ref mut renderer) = self.renderer {
                     renderer.resize(size.width, size.height);
                 }
@@ -440,10 +786,8 @@ impl ApplicationHandler for App {
                 self.last_height = size.height;
             }
 
-            // Detecta cruzamento entre monitores e ajusta a proporção alvo.
+            // Detecta cruzamento de monitor e atualiza a proporção alvo
             WindowEvent::Moved(_) => {
-                // Coleta todos os dados necessários enquanto o empréstimo está ativo,
-                // depois solta o empréstimo antes de chamar resize_layout (que precisa de &mut self).
                 let update = self.renderer.as_ref().and_then(|renderer| {
                     renderer.window.current_monitor().and_then(|monitor| {
                         let monitor_name = monitor.name();
@@ -473,15 +817,14 @@ impl ApplicationHandler for App {
                     },
                 ..
             } => match key_code {
-                KeyCode::Escape => event_loop.exit(),
+                KeyCode::Escape => self.back_menu(event_loop),
                 KeyCode::ArrowLeft => self.move_selection(-1),
                 KeyCode::ArrowRight => self.move_selection(1),
-                KeyCode::Backspace => self.pop_menu(),
+                KeyCode::Enter | KeyCode::Space => self.try_enter_submenu(),
                 _ => {}
             },
 
             WindowEvent::CursorMoved { position, .. } => {
-                // Converte coordenadas físicas do mouse para o espaço lógico do viewport
                 self.mouse_pos = self.physical_to_logical(position.x as f32, position.y as f32);
                 if let Some(ref renderer) = self.renderer {
                     renderer.window.request_redraw();
@@ -499,7 +842,22 @@ impl ApplicationHandler for App {
                                 ArrowId::Back => self.pop_menu(),
                             }
                         } else {
-                            self.try_enter_submenu();
+                            // Hit-test nos cartões do carrossel:
+                            // - Clique no cartão CENTRAL  → entra no submenu (se houver)
+                            // - Clique em cartão LATERAL  → navega até ele
+                            // - Clique fora de todos      → ignora
+                            let mx = self.mouse_pos.0;
+                            let my = self.mouse_pos.1;
+                            if let Some(idx) = self.card_hit_test(mx, my) {
+                                let selected =
+                                    self.menu_stack.last().map(|m| m.selected).unwrap_or(0);
+                                if idx as i32 == selected {
+                                    self.try_enter_submenu();
+                                } else {
+                                    let delta = idx as i32 - selected;
+                                    self.move_selection(delta);
+                                }
+                            }
                         }
                     } else {
                         self.pressed_arrow = None;
@@ -513,14 +871,12 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 self.update();
                 if let Err(e) = self.render() {
-                    let err_msg = format!("{:?}", e);
-                    if err_msg.contains("Outdated")
-                        || err_msg.contains("Timeout")
-                        || err_msg.contains("Lost")
-                        || err_msg.contains("Other")
+                    let msg = format!("{:?}", e);
+                    if !msg.contains("Outdated")
+                        && !msg.contains("Timeout")
+                        && !msg.contains("Lost")
+                        && !msg.contains("Other")
                     {
-                        // Erros transitórios de superfície — ignorar graciosamente
-                    } else {
                         eprintln!("Erro Crítico de Renderização: {:?}", e);
                         event_loop.exit();
                     }
@@ -529,12 +885,12 @@ impl ApplicationHandler for App {
                     renderer.window.request_redraw();
                 }
             }
+
             _ => {}
         }
     }
 
-    /// Inicialização: cria a janela com 35% do monitor primário.
-    /// A proporção alvo é derivada do monitor ativo e usada para calcular o viewport.
+    /// Inicialização: cria janela, renderer e pré-carrega todos os assets.
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let monitor = event_loop
             .primary_monitor()
@@ -545,25 +901,30 @@ impl ApplicationHandler for App {
 
         if let Some(ref m) = monitor {
             let size = m.size();
-            // A janela inicial ocupa 35% do monitor
             init_width = (size.width as f32 * 0.35) as u32;
             init_height = (size.height as f32 * 0.35) as u32;
-
-            // A proporção alvo vem do monitor, não da janela inicial
             self.target_aspect_ratio = size.width as f32 / size.height as f32;
             self.last_monitor_name = m.name();
         }
 
-        let window_attributes = Window::default_attributes()
-            .with_title("2D UI Engine com WGPU - Pronto para Uso")
-            .with_inner_size(winit::dpi::PhysicalSize::new(init_width, init_height))
-            .with_resizable(true);
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_title("2D UI Engine com WGPU")
+                        .with_inner_size(winit::dpi::PhysicalSize::new(init_width, init_height))
+                        .with_resizable(true),
+                )
+                .unwrap(),
+        );
 
-        let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
         let renderer = pollster::block_on(Renderer::new(window)).unwrap();
 
-        // Calcula o layout inicial com as dimensões reais confirmadas pelo SO.
-        // Inicializa last_width/height para que o primeiro Resized do usuário calcule o delta corretamente.
+        // Pré-carrega a fonte e gera os ícones/labels do menu raiz
+        let font = Self::carregar_fonte();
+        let root_items = self.menu_stack[0].items.clone();
+        self.icones = Self::gerar_icones(&root_items, &renderer, &font);
+
         let size = renderer.window.inner_size();
         self.last_width = size.width;
         self.last_height = size.height;
@@ -572,8 +933,76 @@ impl ApplicationHandler for App {
     }
 }
 
+// =============================================================================
+//  Funções auxiliares de desenho (fora do impl, sem acesso a self)
+// =============================================================================
 
-/// Inicializador executável.
+/// Desenha um botão de navegação como uma seta vetorial (haste + cabeça triangular).
+///
+/// Geometria em pixels lógicos, relativa ao canto superior esquerdo do botão (bx, by):
+///
+///   Seta Direita (►)          Seta Esquerda (◄)
+///   ┌─────────────┐            ┌─────────────┐
+///   │  ▬▬▬▬▬▶     │            │     ◀▬▬▬▬▬  │
+///   └─────────────┘            └─────────────┘
+///
+///   haste = retângulo         cabeça = triângulo
+fn desenhar_seta_botao(
+    renderer: &mut Renderer,
+    id: ArrowId,
+    bx: f32,
+    by: f32, // canto sup. esq. do botão (pixels lógicos)
+    bw: f32,
+    bh: f32, // dimensões do botão
+    color: [f32; 4],
+) {
+    let cx = bx + bw * 0.5;
+    let cy = by + bh * 0.5;
+
+    match id {
+        // ►  Seta apontando para a DIREITA
+        ArrowId::Right => {
+            // Haste: retângulo na metade esquerda, centralizado verticalmente
+            renderer.draw_rect(
+                bx + bw * 0.08, // x
+                cy - bh * 0.14, // y
+                bw * 0.50,      // largura
+                bh * 0.28,      // altura
+                color,
+            );
+            // Cabeça: triângulo na metade direita apontando para a direita
+            renderer.draw_triangle(
+                [cx - bw * 0.02, by + bh * 0.08], // topo esquerdo da base
+                [cx - bw * 0.02, by + bh * 0.92], // fundo esquerdo da base
+                [bx + bw * 0.94, cy],             // ponta direita
+                color,
+            );
+        }
+
+        // ◄  Seta apontando para a ESQUERDA (Left e Back)
+        ArrowId::Left | ArrowId::Back => {
+            // Haste: retângulo na metade direita, centralizado verticalmente
+            renderer.draw_rect(
+                cx + bw * 0.02, // x
+                cy - bh * 0.14, // y
+                bw * 0.50,      // largura
+                bh * 0.28,      // altura
+                color,
+            );
+            // Cabeça: triângulo na metade esquerda apontando para a esquerda
+            renderer.draw_triangle(
+                [cx + bw * 0.02, by + bh * 0.08], // topo direito da base
+                [cx + bw * 0.02, by + bh * 0.92], // fundo direito da base
+                [bx + bw * 0.06, cy],             // ponta esquerda
+                color,
+            );
+        }
+    }
+}
+
+// =============================================================================
+//  Ponto de Entrada
+// =============================================================================
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
     let mut app = App::new();

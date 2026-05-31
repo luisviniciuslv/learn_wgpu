@@ -13,7 +13,7 @@ Este guia ensina **como usar** a estrutura e as funções do motor 2D de retâng
    * `renderer.present()`: Desenha tudo na tela de uma só vez.
    * `renderer.uniforms.screen_size`: Array `[f32; 2]` contendo a `[largura, altura]` atual da tela.
 3. **`Button`**: Utilitário para gerenciar botões interativos e colisões de clique/hover.
-
+a
 ---
 
 ## 🚀 1. Inicializando e Rodando uma Janela Básica
@@ -26,7 +26,7 @@ use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, EventLoop},
-    window::Window,
+    window::Window,a
 };
 use crate::interface_pronta_pra_uso::renderer::Renderer;
 
