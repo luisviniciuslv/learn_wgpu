@@ -55,6 +55,10 @@ impl ChessGame {
             }
         }
 
+        // paint E2
+        let e2_x = start_x + 4.0 * cell_size;
+        let e2_y = start_y + 6.0 * cell_size;
+        renderer.draw_rect(e2_x + cell_size * 0.1, e2_y + cell_size * 0.1, cell_size * 0.8, cell_size * 0.8, [1.0, 0.0, 0.0, 0.5]);
         Ok(())
     }
 }
