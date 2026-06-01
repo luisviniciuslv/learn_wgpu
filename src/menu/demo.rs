@@ -29,6 +29,8 @@ use super::types::{ArrowButton, ArrowId, MenuItem, MenuState};
 // Resolução lógica base do design (independente do monitor).
 const BASE_WIDTH: f32 = 800.0;
 const BASE_HEIGHT: f32 = 600.0;
+// Proporcao do modo xadrez: ligeiramente menor para dar "respiro visual".
+const CHESS_TARGET_ASPECT_RATIO: f32 = 0.8;
 
 // =============================================================================
 //  Textura de ícone gerada uma vez e reutilizada em todos os frames
@@ -55,6 +57,8 @@ pub struct App {
     mouse_pos: (f32, f32),
     hovered_arrow: Option<ArrowId>,
     pressed_arrow: Option<ArrowId>,
+    hovered_fullscreen_button: bool,
+    pressed_fullscreen_button: bool,
 
     // --- VIEWPORT E PROPORCIONALIDADE ---
     viewport: Viewport,
@@ -77,6 +81,11 @@ pub struct App {
     saved_target_aspect_ratio: f32,
     saved_width: u32,
     saved_height: u32,
+    last_windowed_size: (u32, u32),
+    windowed_size_before_fullscreen: Option<(u32, u32)>,
+    restore_windowed_size_after_fullscreen: Option<(u32, u32)>,
+    suppress_maximize_to_fullscreen_once: bool,
+    is_fullscreen: bool,
 }
 
 impl App {
@@ -142,6 +151,8 @@ impl App {
             mouse_pos: (0.0, 0.0),
             hovered_arrow: None,
             pressed_arrow: None,
+            hovered_fullscreen_button: false,
+            pressed_fullscreen_button: false,
             viewport: Viewport {
                 x: 0.0,
                 y: 0.0,
@@ -159,7 +170,116 @@ impl App {
             saved_target_aspect_ratio: BASE_WIDTH / BASE_HEIGHT,
             saved_width: BASE_WIDTH as u32,
             saved_height: BASE_HEIGHT as u32,
+            last_windowed_size: (BASE_WIDTH as u32, BASE_HEIGHT as u32),
+            windowed_size_before_fullscreen: None,
+            restore_windowed_size_after_fullscreen: None,
+            suppress_maximize_to_fullscreen_once: false,
+            is_fullscreen: false,
         }
+    }
+
+    fn apply_pending_window_restore(&mut self) -> bool {
+        if self.is_fullscreen {
+            return false;
+        }
+
+        let (rw, rh) = match self.restore_windowed_size_after_fullscreen {
+            Some(v) => v,
+            None => return false,
+        };
+
+        let renderer = match self.renderer.as_ref() {
+            Some(r) => r,
+            None => return false,
+        };
+
+        let current = renderer.window.inner_size();
+        let reached = (current.width as i32 - rw as i32).abs() <= 2
+            && (current.height as i32 - rh as i32).abs() <= 2;
+
+        if reached {
+            self.restore_windowed_size_after_fullscreen = None;
+            self.last_windowed_size = (current.width, current.height);
+            return false;
+        }
+
+        renderer.window.set_maximized(false);
+        self.pending_size = Some((rw, rh));
+        let _ = renderer
+            .window
+            .request_inner_size(winit::dpi::PhysicalSize::new(rw, rh));
+        true
+    }
+
+    fn toggle_fullscreen(&mut self) {
+        let renderer = match self.renderer.as_ref() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let currently_fullscreen = renderer.window.fullscreen().is_some();
+
+        if currently_fullscreen {
+            renderer.window.set_fullscreen(None);
+
+            // Ao sair do fullscreen, volta para o tamanho que a janela tinha antes.
+            let restore_size = self
+                .windowed_size_before_fullscreen
+                .unwrap_or(self.last_windowed_size);
+            self.restore_windowed_size_after_fullscreen = Some(restore_size);
+            renderer.window.set_maximized(false);
+
+            self.suppress_maximize_to_fullscreen_once = true;
+            self.is_fullscreen = false;
+        } else {
+            let size = renderer.window.inner_size();
+            let from_maximized = renderer.window.is_maximized();
+
+            // Se entrou por janela maximizada, preserva o último tamanho "normal" conhecido.
+            if from_maximized {
+                self.windowed_size_before_fullscreen = Some(self.last_windowed_size);
+            } else if size.width > 0 && size.height > 0 {
+                self.windowed_size_before_fullscreen = Some((size.width, size.height));
+                self.last_windowed_size = (size.width, size.height);
+            } else {
+                self.windowed_size_before_fullscreen = Some(self.last_windowed_size);
+            }
+
+            let monitor = renderer.window.current_monitor();
+            renderer
+                .window
+                .set_fullscreen(Some(winit::window::Fullscreen::Borderless(monitor)));
+            self.is_fullscreen = true;
+        }
+    }
+
+    fn fullscreen_button_rect(&self) -> (f32, f32, f32, f32) {
+        let w = 120.0;
+        let h = 36.0;
+        let margin = 12.0;
+        (self.viewport.width - w - margin, margin, w, h)
+    }
+
+    fn should_show_fullscreen_button(&self) -> bool {
+        let is_fullscreen = self
+            .renderer
+            .as_ref()
+            .map(|r| r.window.fullscreen().is_some())
+            .unwrap_or(self.is_fullscreen);
+        is_fullscreen && self.mouse_pos.1 <= 72.0
+    }
+
+    fn update_fullscreen_button_hover(&mut self) {
+        if !self.should_show_fullscreen_button() {
+            self.hovered_fullscreen_button = false;
+            return;
+        }
+
+        let (x, y, w, h) = self.fullscreen_button_rect();
+        self.hovered_fullscreen_button = self.mouse_pos.0 >= x
+            && self.mouse_pos.0 <= x + w
+            && self.mouse_pos.1 >= y
+            && self.mouse_pos.1 <= y + h;
     }
 
     /// Carrega a fonte do sistema — tenta locais comuns de fontes no Windows, macOS e Linux.
@@ -260,7 +380,7 @@ impl App {
         let win_w = window_w as f32;
         let win_h = window_h as f32;
 
-        let (vp_w, vp_h, vp_x, vp_y) = if self.chess_game.is_some() {
+        let (vp_w, vp_h, vp_x, vp_y) = if self.chess_game.is_some() || self.is_fullscreen {
             (win_w, win_h, 0.0, 0.0)
         } else {
             let ratio = self.target_aspect_ratio;
@@ -361,11 +481,33 @@ impl App {
         }
     }
 
+    fn carousel_layout(vp_w: f32, vp_h: f32) -> (f32, f32, f32, f32) {
+        let scale_factor = vp_w / BASE_WIDTH;
+        let cx = vp_w * 0.5;
+        let cy = vp_h * 0.5;
+
+        // Curva suave: em telas grandes cresce menos; em telas pequenas cresce mais.
+        let fator_suave = scale_factor.sqrt();
+        let base_size = 120.0 * fator_suave;
+        let gap = 160.0 * fator_suave;
+
+        (cx, cy, base_size, gap)
+    }
+
     // -------------------------------------------------------------------------
     //  Renderização
     // -------------------------------------------------------------------------
 
     fn render(&mut self) -> anyhow::Result<()> {
+        let show_fullscreen_button = self.should_show_fullscreen_button();
+        let fullscreen_button_rect = if show_fullscreen_button {
+            Some(self.fullscreen_button_rect())
+        } else {
+            None
+        };
+        let fullscreen_button_hovered = self.hovered_fullscreen_button;
+        let fullscreen_button_pressed = self.pressed_fullscreen_button;
+
         let renderer = match &mut self.renderer {
             Some(r) => r,
             None => return Ok(()),
@@ -401,6 +543,38 @@ impl App {
             2.0 * scale_factor,
             [0.3, 0.5, 0.9, 0.9],
         );
+
+        if let Some((bx, by, bw, bh)) = fullscreen_button_rect {
+            let bg = if fullscreen_button_pressed {
+                [0.20, 0.60, 1.00, 1.0]
+            } else if fullscreen_button_hovered {
+                [0.30, 0.55, 0.90, 1.0]
+            } else {
+                [0.16, 0.20, 0.30, 0.95]
+            };
+
+            renderer.draw_rect(bx, by, bw, bh, bg);
+            renderer.draw_rect(bx, by + bh - 2.0, bw, 2.0, [0.8, 0.9, 1.0, 0.9]);
+
+            // Ícone simples de "sair do fullscreen" com cantos em L.
+            let pad = 9.0;
+            let l = 8.0;
+            let t = 2.0;
+            let c = [0.95, 0.98, 1.0, 1.0];
+
+            // canto superior esquerdo
+            renderer.draw_rect(bx + pad, by + pad, l, t, c);
+            renderer.draw_rect(bx + pad, by + pad, t, l, c);
+            // canto superior direito
+            renderer.draw_rect(bx + bw - pad - l, by + pad, l, t, c);
+            renderer.draw_rect(bx + bw - pad - t, by + pad, t, l, c);
+            // canto inferior esquerdo
+            renderer.draw_rect(bx + pad, by + bh - pad - t, l, t, c);
+            renderer.draw_rect(bx + pad, by + bh - pad - l, t, l, c);
+            // canto inferior direito
+            renderer.draw_rect(bx + bw - pad - l, by + bh - pad - t, l, t, c);
+            renderer.draw_rect(bx + bw - pad - t, by + bh - pad - l, t, l, c);
+        }
 
         if let Some(ref game) = self.chess_game {
             let scale_factor = vp_w.min(vp_h * 0.8) / BASE_WIDTH;
@@ -482,10 +656,7 @@ impl App {
         }
 
         // 4. Carrossel de menu
-        let cx = vp_w * 0.5;
-        let cy = vp_h * 0.5;
-        let base_size = 120.0 * scale_factor;
-        let gap = 160.0 * scale_factor;
+        let (cx, cy, base_size, gap) = Self::carousel_layout(vp_w, vp_h);
 
         // Determina qual conjunto de ícones usar (raiz ou submenu)
         let profundidade = self.menu_stack.len();
@@ -668,8 +839,8 @@ impl App {
             self.saved_width = self.last_width;
             self.saved_height = self.last_height;
 
-            // 3. Definir a proporção alvo como quadrada (1.0)
-            self.target_aspect_ratio = 0.8;
+            // 3. Proporcao alvo com "respiro visual" para o modo xadrez.
+            self.target_aspect_ratio = CHESS_TARGET_ASPECT_RATIO;
 
             // 4. Requisitar que a janela fique quadrada
             if let Some(ref renderer) = self.renderer {
@@ -754,12 +925,8 @@ impl App {
         let renderer = self.renderer.as_ref()?;
         let vp_w = renderer.uniforms.screen_size[0];
         let vp_h = renderer.uniforms.screen_size[1];
-        let scale_factor = vp_w / BASE_WIDTH;
 
-        let cx = vp_w * 0.5;
-        let cy = vp_h * 0.5;
-        let base_size = 120.0 * scale_factor;
-        let gap = 160.0 * scale_factor;
+        let (cx, cy, base_size, gap) = Self::carousel_layout(vp_w, vp_h);
 
         let menu = self.menu_stack.last()?;
 
@@ -809,6 +976,7 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         match event {
+            
             WindowEvent::CloseRequested => event_loop.exit(),
 
             // Resize com preservação de proporção:
@@ -816,6 +984,44 @@ impl ApplicationHandler for App {
             //   - Se for resize do usuário → calcula o tamanho correto e requisita uma vez.
             WindowEvent::Resized(size) => {
                 if size.width == 0 || size.height == 0 || self.renderer.is_none() {
+                    return;
+                }
+
+                if let Some(renderer) = self.renderer.as_ref() {
+                    self.is_fullscreen = renderer.window.fullscreen().is_some();
+                }
+
+                if !self.is_fullscreen {
+                    // Em alguns cenários o OS aplica o tamanho restaurado com atraso.
+                    // Requisitamos novamente até confirmar que o alvo foi atingido.
+                    if self.apply_pending_window_restore() {
+                        return;
+                    }
+                }
+
+                // Clique no botão nativo de maximizar vira fullscreen.
+                // Após sair do fullscreen, ignoramos um resize para evitar reentrada imediata.
+                if !self.is_fullscreen {
+                    if self.suppress_maximize_to_fullscreen_once
+                        || self.restore_windowed_size_after_fullscreen.is_some()
+                    {
+                        self.suppress_maximize_to_fullscreen_once = false;
+                    } else if let Some(renderer) = self.renderer.as_ref() {
+                        if renderer.window.is_maximized() {
+                            self.toggle_fullscreen();
+                            return;
+                        }
+                    }
+                }
+
+                // Em fullscreen não forçamos proporção de janela, apenas atualizamos a surface/layout.
+                if self.is_fullscreen {
+                    if let Some(ref mut renderer) = self.renderer {
+                        renderer.resize(size.width, size.height);
+                    }
+                    self.resize_layout(size.width, size.height);
+                    self.last_width = size.width;
+                    self.last_height = size.height;
                     return;
                 }
 
@@ -860,6 +1066,16 @@ impl ApplicationHandler for App {
                 self.resize_layout(size.width, size.height);
                 self.last_width = size.width;
                 self.last_height = size.height;
+
+                // Só atualiza o "último tamanho de janela normal" quando não está maximizada.
+                // Isso evita salvar um tamanho gigante como baseline de restauração.
+                if let Some(renderer) = self.renderer.as_ref() {
+                    if !renderer.window.is_maximized()
+                        && self.restore_windowed_size_after_fullscreen.is_none()
+                    {
+                        self.last_windowed_size = (size.width, size.height);
+                    }
+                }
             }
 
             // Detecta cruzamento de monitor e atualiza a proporção alvo
@@ -893,6 +1109,7 @@ impl ApplicationHandler for App {
                     },
                 ..
             } => match key_code {
+                KeyCode::F11 => self.toggle_fullscreen(),
                 KeyCode::Escape => self.back_menu(event_loop),
                 KeyCode::ArrowLeft => self.move_selection(-1),
                 KeyCode::ArrowRight => self.move_selection(1),
@@ -902,6 +1119,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = self.physical_to_logical(position.x as f32, position.y as f32);
+                self.update_fullscreen_button_hover();
                 if let Some(ref renderer) = self.renderer {
                     renderer.window.request_redraw();
                 }
@@ -910,6 +1128,16 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == MouseButton::Left {
                     if state == ElementState::Pressed {
+                        self.update_fullscreen_button_hover();
+                        if self.should_show_fullscreen_button() && self.hovered_fullscreen_button {
+                            self.pressed_fullscreen_button = true;
+                            self.toggle_fullscreen();
+                            if let Some(ref renderer) = self.renderer {
+                                renderer.window.request_redraw();
+                            }
+                            return;
+                        }
+
                         if let Some(arrow) = self.hovered_arrow {
                             self.pressed_arrow = Some(arrow);
                             match arrow {
@@ -937,6 +1165,7 @@ impl ApplicationHandler for App {
                         }
                     } else {
                         self.pressed_arrow = None;
+                        self.pressed_fullscreen_button = false;
                         // Se o resize falhou no clique inicial, ele será executado aqui com sucesso instantâneo!
                         if self.chess_game.is_some() {
                             if let Some((pw, ph)) = self.pending_size {
@@ -955,6 +1184,13 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
+                if self.apply_pending_window_restore() {
+                    if let Some(ref renderer) = self.renderer {
+                        renderer.window.request_redraw();
+                    }
+                    return;
+                }
+
                 self.update();
                 if let Err(e) = self.render() {
                     let msg = format!("{:?}", e);
@@ -1014,6 +1250,8 @@ impl ApplicationHandler for App {
         let size = renderer.window.inner_size();
         self.last_width = size.width;
         self.last_height = size.height;
+        self.last_windowed_size = (size.width, size.height);
+        self.windowed_size_before_fullscreen = Some((size.width, size.height));
         self.renderer = Some(renderer);
         self.resize_layout(size.width, size.height);
     }
