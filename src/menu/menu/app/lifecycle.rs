@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use winit::{
-    application::ApplicationHandler,
-    event::*,
-    event_loop::ActiveEventLoop,
-    keyboard::PhysicalKey,
+    application::ApplicationHandler, event::*, event_loop::ActiveEventLoop, keyboard::PhysicalKey,
     window::Window,
 };
 
@@ -146,9 +143,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::CursorMoved { position, .. } => self.handle_cursor_moved(position),
 
-            WindowEvent::MouseInput { state, button, .. } => {
-                self.handle_mouse_input(state, button)
-            }
+            WindowEvent::MouseInput { state, button, .. } => self.handle_mouse_input(state, button),
 
             WindowEvent::RedrawRequested => {
                 if self.apply_pending_window_restore() {
@@ -211,6 +206,19 @@ impl ApplicationHandler for App {
         let font = carregar_fonte();
         let root_items = self.menu_stack[0].items.clone();
         self.icones = gerar_icones(&root_items, &renderer, &font);
+
+        let img_chess = crate::menu::renderer::carregar_png_ou_fallback(
+            "assets/chess_pieces.png",
+            [255, 255, 255, 255],
+        );
+        let tex_chess = crate::menu::renderer::Texture::from_image_buffer(
+            &renderer.device,
+            &renderer.queue,
+            &img_chess,
+            &renderer.texture_bind_group_layout,
+            "chess_pieces_spritesheet",
+        );
+        self.chess_texture = Some(tex_chess.bind_group);
 
         let size = renderer.window.inner_size();
         self.last_width = size.width;

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::super::renderer::{carregar_png_ou_fallback, rasterizar_texto, Renderer, Texture};
+use super::super::renderer::{Renderer, Texture, carregar_png_ou_fallback, rasterizar_texto};
 use super::super::types::MenuItem;
 
 // =============================================================================

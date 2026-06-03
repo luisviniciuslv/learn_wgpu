@@ -1,5 +1,5 @@
 use crate::menu::menu::draw::desenhar_seta_botao;
-use crate::menu::menu::layout::{carousel_layout, BASE_WIDTH};
+use crate::menu::menu::layout::{BASE_WIDTH, carousel_layout};
 use crate::menu::types::ArrowId;
 
 use super::state::App;
@@ -100,7 +100,13 @@ impl App {
 
             renderer.draw_rect(0.0, 0.0, vp_w, vp_h, [0.08, 0.08, 0.12, 1.0]);
 
-            game.render(renderer, vp_w, vp_h)?;
+            // Altere a chamada do game.render para incluir a textura se ela existir:
+            if let Some(ref chess_bg) = self.chess_texture {
+                game.render(renderer, vp_w, vp_h, chess_bg)?;
+            } else {
+                // Caso a textura falhe por algum motivo, renderiza sem dar crash
+                game.render_placeholder(renderer, vp_w, vp_h)?;
+            }
 
             renderer.draw_rect(0.0, 0.0, vp_w, chess_start_y, [0.13, 0.13, 0.18, 1.0]);
             renderer.draw_rect(
@@ -113,7 +119,13 @@ impl App {
 
             let footer_y = chess_start_y + board_size;
             let footer_render_h = vp_h - footer_y;
-            renderer.draw_rect(0.0, footer_y, vp_w, footer_render_h, [0.13, 0.13, 0.18, 1.0]);
+            renderer.draw_rect(
+                0.0,
+                footer_y,
+                vp_w,
+                footer_render_h,
+                [0.13, 0.13, 0.18, 1.0],
+            );
             renderer.draw_rect(
                 0.0,
                 footer_y,
@@ -256,7 +268,9 @@ impl App {
                 [0.2, 0.3, 0.5, 1.0]
             };
 
-            desenhar_seta_botao(renderer, arrow.id, arrow.x, arrow.y, arrow.w, arrow.h, color);
+            desenhar_seta_botao(
+                renderer, arrow.id, arrow.x, arrow.y, arrow.w, arrow.h, color,
+            );
         }
 
         let cursor_size = 8.0 * scale_factor;

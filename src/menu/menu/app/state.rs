@@ -31,6 +31,7 @@ pub struct App {
     pub(super) icones_sub: Vec<IconeItem>,
 
     pub(super) chess_game: Option<ChessGame>,
+    pub(super) chess_texture: Option<std::sync::Arc<wgpu::BindGroup>>,
 
     pub(super) saved_target_aspect_ratio: f32,
     pub(super) saved_width: u32,
@@ -121,6 +122,7 @@ impl App {
             icones: Vec::new(),
             icones_sub: Vec::new(),
             chess_game: None,
+            chess_texture: None,
             saved_target_aspect_ratio: BASE_WIDTH / BASE_HEIGHT,
             saved_width: BASE_WIDTH as u32,
             saved_height: BASE_HEIGHT as u32,

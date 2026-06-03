@@ -115,7 +115,7 @@ impl Texture {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
@@ -414,6 +414,22 @@ impl Renderer {
         let bg = self.default_texture.bind_group.clone();
         // UV [0,0,1,1] cobre toda a textura 1×1 branca → resultado = cor pura
         self.draw_rect_impl(x, y, w, h, color, [0.0, 0.0, 1.0, 1.0], bg);
+    }
+
+    pub fn draw_circle(&mut self, cx: f32, cy: f32, radius: f32, color: [f32; 4]) {
+        let num_segments = 32;
+        let angle_step = 2.0 * std::f32::consts::PI / num_segments as f32;
+
+        for i in 0..num_segments {
+            let theta1 = i as f32 * angle_step;
+            let theta2 = (i + 1) as f32 * angle_step;
+
+            let p0 = [cx, cy];
+            let p1 = [cx + radius * theta1.cos(), cy + radius * theta1.sin()];
+            let p2 = [cx + radius * theta2.cos(), cy + radius * theta2.sin()];
+
+            self.draw_triangle(p0, p1, p2, color);
+        }
     }
 
     /// Desenha um triângulo sólido com três vértices em pixels LÓGICOS.

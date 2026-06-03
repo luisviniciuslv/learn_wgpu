@@ -157,9 +157,7 @@ impl App {
             let chess_start_y = header_h + (available_h - board_size) * 0.5;
 
             let b_y = (chess_start_y * 0.25).max(4.0);
-            let b_h = (chess_start_y * 0.50)
-                .max(16.0)
-                .min(40.0 * scale_factor);
+            let b_h = (chess_start_y * 0.50).max(16.0).min(40.0 * scale_factor);
             (b_y, b_y, b_h, b_h)
         } else {
             (

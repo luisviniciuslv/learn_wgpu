@@ -1,6 +1,6 @@
 use crate::menu::chess::ChessGame;
 use crate::menu::menu::assets::{carregar_fonte, gerar_icones};
-use crate::menu::menu::layout::{carousel_layout, CHESS_TARGET_ASPECT_RATIO};
+use crate::menu::menu::layout::{CHESS_TARGET_ASPECT_RATIO, carousel_layout};
 use crate::menu::types::MenuState;
 
 use super::state::App;
