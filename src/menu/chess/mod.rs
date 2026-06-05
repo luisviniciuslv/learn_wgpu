@@ -27,26 +27,7 @@ pub struct Piece {
 pub struct ChessGame {
     pub board: [[Option<Piece>; 8]; 8],
     pub selected_square: Option<(usize, usize)>,
-}
-
-/// Retorna o índice correspondente da peça na sua spritesheet (de 0 a 11).
-/// IMPORTANTE: Ajuste a ordem deste match de acordo com a disposição exata da sua imagem!
-fn get_piece_index(piece_type: PieceType, color: PieceColor) -> usize {
-    // Exemplo baseado em uma ordem comum: Rei, Rainha, Bispo, Cavalo, Torre, Peão
-    let base_idx = match piece_type {
-        PieceType::King => 4,
-        PieceType::Queen => 5,
-        PieceType::Bishop => 1,
-        PieceType::Knight => 3,
-        PieceType::Rook => 2,
-        PieceType::Pawn => 0,
-    };
-
-    // Se for preta, pula os 6 primeiros índices ocupados pelas brancas
-    match color {
-        PieceColor::White => base_idx,
-        PieceColor::Black => base_idx + 6,
-    }
+    pub cursor: (usize, usize), // Guarda onde a seleção do teclado está apontando (linha, coluna)
 }
 
 fn get_piece_column_index(piece_type: PieceType) -> usize {
@@ -59,7 +40,65 @@ fn get_piece_column_index(piece_type: PieceType) -> usize {
         PieceType::Pawn => 5,
     }
 }
+
 impl ChessGame {
+    
+    /// Converte a coordenada (X, Y) do mouse para uma casa (linha, coluna) do tabuleiro
+    pub fn mouse_to_square(&self, mx: f32, my: f32, vp_w: f32, vp_h: f32) -> Option<(usize, usize)> {
+        // Mesma matemática usada no seu método render() para achar o tabuleiro na tela
+        let scale_factor = vp_w.min(vp_h * 0.8) / 800.0;
+        let header_h = 75.0 * scale_factor;
+        let footer_h = 65.0 * scale_factor;
+        let available_h = (vp_h - header_h - footer_h).max(10.0);
+        let board_size = vp_w.min(available_h) * 0.92;
+        let cell_size = board_size / 8.0;
+        let start_x = (vp_w - board_size) * 0.5;
+        let start_y = header_h + (available_h - board_size) * 0.5;
+
+        // Verifica se o mouse está dentro dos limites do tabuleiro
+        if mx >= start_x && mx < start_x + board_size && my >= start_y && my < start_y + board_size {
+            let col = ((mx - start_x) / cell_size) as usize;
+            let row = ((my - start_y) / cell_size) as usize;
+            
+            // Garante que fique estritamente entre 0 e 7
+            if row < 8 && col < 8 {
+                return Some((row, col));
+            }
+        }
+        None // Mouse clicou fora do tabuleiro
+    }
+
+    pub fn select_or_move(&mut self, row: usize, col: usize) {
+        // Se o jogador já tinha selecionado uma casa anteriormente
+        if let Some((from_row, from_col)) = self.selected_square {
+            
+            // 1. Se ele clicou na mesma casa, ele quer desfazer a seleção
+            if from_row == row && from_col == col {
+                self.selected_square = None;
+                return;
+            }
+
+            // 2. Se ele clicou em OUTRA casa, vamos mover a peça
+            // Pegamos a peça que estava na casa de origem
+            if let Some(piece) = self.board[from_row][from_col] {
+                // Move a peça para o destino
+                self.board[row][col] = Some(piece);
+                // Apaga a peça da posição antiga
+                self.board[from_row][from_col] = None;
+            }
+
+            // Movimento concluído, limpamos a seleção para o próximo lance
+            self.selected_square = None;
+
+        } else {
+            // Se nenhuma casa estava selecionada, tentamos selecionar a atual
+            // Mas só selecionamos se houver de fato uma peça ali!
+            if self.board[row][col].is_some() {
+                self.selected_square = Some((row, col));
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             board: [
@@ -149,6 +188,7 @@ impl ChessGame {
                 ],
             ],
             selected_square: None,
+            cursor: (7, 4)
         }
     }
 
@@ -229,15 +269,29 @@ impl ChessGame {
             }
         }
 
-        // Destaque visual da casa E2 (Mantido do seu código)
-        let e2_x = start_x + 4.0 * cell_size;
-        let e2_y = start_y + 6.0 * cell_size;
+        if let Some((sel_row, sel_col)) = self.selected_square {
+            let sel_x = start_x + sel_col as f32 * cell_size;
+            let sel_y = start_y + sel_row as f32 * cell_size;
+            
+            // Uma borda translúcida verde indicando seleção
+            renderer.draw_rect(
+                sel_x + cell_size * 0.05,
+                sel_y + cell_size * 0.05,
+                cell_size * 0.9,
+                cell_size * 0.9,
+                [0.0, 1.0, 0.0, 0.4], // Verde com 40% de opacidade
+            );
+        }
+
+        // NOVO: Desenha uma borda amarela onde o CURSOR DO TECLADO está apontando
+        let cur_x = start_x + self.cursor.1 as f32 * cell_size;
+        let cur_y = start_y + self.cursor.0 as f32 * cell_size;
         renderer.draw_rect(
-            e2_x + cell_size * 0.1,
-            e2_y + cell_size * 0.1,
-            cell_size * 0.8,
-            cell_size * 0.8,
-            [1.0, 0.0, 0.0, 0.5],
+            cur_x + cell_size * 0.15,
+            cur_y + cell_size * 0.15,
+            cell_size * 0.7,
+            cell_size * 0.7,
+            [1.0, 1.0, 0.0, 0.4], // Amarelo com 40% de opacidade
         );
 
         Ok(())
