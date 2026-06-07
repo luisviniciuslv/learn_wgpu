@@ -27,7 +27,7 @@ pub struct Piece {
 pub struct ChessGame {
     pub board: [[Option<Piece>; 8]; 8],
     pub selected_square: Option<(usize, usize)>,
-    pub cursor: (usize, usize), // Guarda onde a seleção do teclado está apontando (linha, coluna)
+    pub cursor: Option<(usize, usize)>, // Guarda onde a seleção do teclado está apontando (linha, coluna)
 }
 
 fn get_piece_column_index(piece_type: PieceType) -> usize {
@@ -44,7 +44,8 @@ fn get_piece_column_index(piece_type: PieceType) -> usize {
 impl ChessGame {
     
     /// Converte a coordenada (X, Y) do mouse para uma casa (linha, coluna) do tabuleiro
-    pub fn mouse_to_square(&self, mx: f32, my: f32, vp_w: f32, vp_h: f32) -> Option<(usize, usize)> {
+    pub fn mouse_to_square(&mut self, mx: f32, my: f32, vp_w: f32, vp_h: f32) -> Option<(usize, usize)> {
+        self.cursor = None; // Reseta o cursor do teclado quando o mouse é usado
         // Mesma matemática usada no seu método render() para achar o tabuleiro na tela
         let scale_factor = vp_w.min(vp_h * 0.8) / 800.0;
         let header_h = 75.0 * scale_factor;
@@ -188,7 +189,7 @@ impl ChessGame {
                 ],
             ],
             selected_square: None,
-            cursor: (7, 4)
+            cursor: Some((7, 4)), // Inicia com o cursor apontando para o Rei Branco
         }
     }
 
@@ -284,27 +285,18 @@ impl ChessGame {
         }
 
         // NOVO: Desenha uma borda amarela onde o CURSOR DO TECLADO está apontando
-        let cur_x = start_x + self.cursor.1 as f32 * cell_size;
-        let cur_y = start_y + self.cursor.0 as f32 * cell_size;
-        renderer.draw_rect(
-            cur_x + cell_size * 0.15,
-            cur_y + cell_size * 0.15,
-            cell_size * 0.7,
-            cell_size * 0.7,
-            [1.0, 1.0, 0.0, 0.4], // Amarelo com 40% de opacidade
-        );
+        if let Some((cur_row, cur_col)) = self.cursor {
+            let cur_x = start_x + cur_col as f32 * cell_size;
+            let cur_y = start_y + cur_row as f32 * cell_size;
+            renderer.draw_rect(
+                cur_x + cell_size * 0.15,
+                cur_y + cell_size * 0.15,
+                cell_size * 0.7,
+                cell_size * 0.7,
+                [1.0, 1.0, 0.0, 0.4], // Amarelo com 40% de opacidade
+            );
+        }
 
-        Ok(())
-    }
-
-    /// Método fallback caso ocorra algum problema no carregamento da textura
-    pub fn render_placeholder(
-        &self,
-        renderer: &mut Renderer,
-        vp_w: f32,
-        vp_h: f32,
-    ) -> anyhow::Result<()> {
-        // ... Você pode mover a lógica do seu círculo ou peão antigo para cá como segurança
         Ok(())
     }
 }

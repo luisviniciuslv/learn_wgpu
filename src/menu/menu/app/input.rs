@@ -8,34 +8,33 @@ use crate::menu::types::ArrowId;
 use super::state::App;
 
 impl App {
-    pub(super) fn handle_keyboard(&mut self, event_loop: &ActiveEventLoop, key_code: KeyCode) {
-        match key_code {
-            KeyCode::F11 => self.toggle_fullscreen(),
-            KeyCode::Escape => self.back_menu(event_loop),
-            KeyCode::ArrowLeft => self.move_selection(-1),
-            KeyCode::ArrowRight => self.move_selection(1),
-            KeyCode::Enter | KeyCode::Space => self.try_enter_submenu(),
-            _ => {}
+   pub(super) fn handle_keyboard(&mut self, event_loop: &ActiveEventLoop, key_code: KeyCode) {
+        // 1. COMANDOS GLOBAIS: Funcionam em qualquer tela do aplicativo
+        if key_code == KeyCode::F11 {
+            self.toggle_fullscreen();
+            return;
         }
 
+        // 2. COMANDOS DO XADREZ: Se o jogo estiver ativo, intercepta as teclas e sai da função imediatamente
         if let Some(ref mut game) = self.chess_game {
+            let cursor = game.cursor.unwrap_or((0, 0)); // Garante que o cursor nunca seja None aqui, mas sim (0, 0) se não tiver sido setado
             match key_code {
                 KeyCode::Escape => self.back_menu(event_loop), // Deixa o ESC voltar ao menu
                 KeyCode::ArrowUp => {
-                    if game.cursor.0 > 0 { game.cursor.0 -= 1; }
+                    if cursor.0 > 0 { game.cursor = Some((cursor.0 - 1, cursor.1)); }
                 }
                 KeyCode::ArrowDown => {
-                    if game.cursor.0 < 7 { game.cursor.0 += 1; }
+                    if cursor.0 < 7 { game.cursor = Some((cursor.0 + 1, cursor.1)); }
                 }
                 KeyCode::ArrowLeft => {
-                    if game.cursor.1 > 0 { game.cursor.1 -= 1; }
+                    if cursor.1 > 0 { game.cursor = Some((cursor.0, cursor.1 - 1)); }
                 }
                 KeyCode::ArrowRight => {
-                    if game.cursor.1 < 7 { game.cursor.1 += 1; }
+                    if cursor.1 < 7 { game.cursor = Some((cursor.0, cursor.1 + 1)); }
                 }
                 KeyCode::Enter | KeyCode::Space => {
-                    // Quando aperta Espaço ou Enter, simula o clique na casa onde o cursor está
-                    game.select_or_move(game.cursor.0, game.cursor.1);
+                    // Executa o movimento ou seleção apenas dentro do tabuleiro
+                    game.select_or_move(game.cursor.unwrap_or((0, 0)).0, game.cursor.unwrap_or((0, 0)).1);
                 }
                 _ => {}
             }
@@ -43,7 +42,16 @@ impl App {
             if let Some(ref renderer) = self.renderer {
                 renderer.window.request_redraw(); // Força a tela a atualizar o visual do cursor
             }
-            return; // Sai da função para não acionar os controles do menu padrão
+            return; // IMPORTANTE: Sai da função aqui para NUNCA executar os comandos do menu abaixo
+        }
+
+        // 3. COMANDOS DO MENU PRINCIPAL: Só serão executados se "self.chess_game" for None
+        match key_code {
+            KeyCode::Escape => self.back_menu(event_loop),
+            KeyCode::ArrowLeft => self.move_selection(-1),
+            KeyCode::ArrowRight => self.move_selection(1),
+            KeyCode::Enter | KeyCode::Space => self.try_enter_submenu(),
+            _ => {}
         }
     }
 

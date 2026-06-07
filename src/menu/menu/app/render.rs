@@ -103,9 +103,6 @@ impl App {
             // Altere a chamada do game.render para incluir a textura se ela existir:
             if let Some(ref chess_bg) = self.chess_texture {
                 game.render(renderer, vp_w, vp_h, chess_bg)?;
-            } else {
-                // Caso a textura falhe por algum motivo, renderiza sem dar crash
-                game.render_placeholder(renderer, vp_w, vp_h)?;
             }
 
             renderer.draw_rect(0.0, 0.0, vp_w, chess_start_y, [0.13, 0.13, 0.18, 1.0]);
