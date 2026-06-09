@@ -18,26 +18,62 @@ impl App {
         // 2. COMANDOS DO XADREZ: Se o jogo estiver ativo, intercepta as teclas e sai da função imediatamente
         if let Some(ref mut game) = self.chess_game {
             let cursor = game.cursor.unwrap_or((0, 0)); // Garante que o cursor nunca seja None aqui, mas sim (0, 0) se não tiver sido setado
+
+            // Verifica se o jogador atual está a jogar com as Pretas
+            let is_black = game.player_color == crate::menu::chess::PieceColor::Black;
+
             match key_code {
                 KeyCode::Escape => self.back_menu(event_loop), // Deixa o ESC voltar ao menu
                 KeyCode::ArrowUp => {
-                    if cursor.0 > 0 {
-                        game.cursor = Some((cursor.0 - 1, cursor.1));
+                    if is_black {
+                        // Para as pretas, ir para cima visualmente significa avançar para a linha 7
+                        if cursor.0 < 7 {
+                            game.cursor = Some((cursor.0 + 1, cursor.1));
+                        }
+                    } else {
+                        // Para as brancas, ir para cima visualmente significa avançar para a linha 0
+                        if cursor.0 > 0 {
+                            game.cursor = Some((cursor.0 - 1, cursor.1));
+                        }
                     }
                 }
                 KeyCode::ArrowDown => {
-                    if cursor.0 < 7 {
-                        game.cursor = Some((cursor.0 + 1, cursor.1));
+                    if is_black {
+                        // Para as pretas, ir para baixo significa recuar para a linha 0
+                        if cursor.0 > 0 {
+                            game.cursor = Some((cursor.0 - 1, cursor.1));
+                        }
+                    } else {
+                        // Para as brancas, ir para baixo significa avançar para a linha 7
+                        if cursor.0 < 7 {
+                            game.cursor = Some((cursor.0 + 1, cursor.1));
+                        }
                     }
                 }
                 KeyCode::ArrowLeft => {
-                    if cursor.1 > 0 {
-                        game.cursor = Some((cursor.0, cursor.1 - 1));
+                    if is_black {
+                        // Para as pretas, a esquerda do ecrã corresponde à coluna 7
+                        if cursor.1 < 7 {
+                            game.cursor = Some((cursor.0, cursor.1 + 1));
+                        }
+                    } else {
+                        // Para as brancas, a esquerda do ecrã corresponde à coluna 0
+                        if cursor.1 > 0 {
+                            game.cursor = Some((cursor.0, cursor.1 - 1));
+                        }
                     }
                 }
                 KeyCode::ArrowRight => {
-                    if cursor.1 < 7 {
-                        game.cursor = Some((cursor.0, cursor.1 + 1));
+                    if is_black {
+                        // Para as pretas, a direita do ecrã corresponde à coluna 0
+                        if cursor.1 > 0 {
+                            game.cursor = Some((cursor.0, cursor.1 - 1));
+                        }
+                    } else {
+                        // Para as brancas, a direita do ecrã corresponde à coluna 7
+                        if cursor.1 < 7 {
+                            game.cursor = Some((cursor.0, cursor.1 + 1));
+                        }
                     }
                 }
                 KeyCode::Enter | KeyCode::Space => {

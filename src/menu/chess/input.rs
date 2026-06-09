@@ -1,3 +1,5 @@
+use crate::menu::chess::PieceColor;
+
 // Lógica de entrada do usuário: mouse e teclado
 use super::ChessGame;
 
@@ -29,13 +31,22 @@ impl ChessGame {
 
             // Garante que fique estritamente entre 0 e 7
             if row < 8 && col < 8 {
-                return Some((row, col));
+                if self.player_color == PieceColor::Black {
+                    return Some((7 - row, 7 - col));
+                } else {
+                    return Some((row, col));
+                }
             }
         }
         None // Mouse clicou fora do tabuleiro
     }
 
     pub fn select_or_move(&mut self, row: usize, col: usize) {
+        // Bloqueia qualquer ação se não for o turno do jogador
+        if self.current_turn != self.player_color {
+            return;
+        }
+
         // Se o jogador já tinha selecionado uma casa anteriormente
         if let Some((from_row, from_col)) = self.selected_square {
             // 1. Se ele clicou na mesma casa, ele quer desfazer a seleção
@@ -46,13 +57,18 @@ impl ChessGame {
             }
 
             // 2. Se ele clicou em OUTRA casa, movemos a peça
-            // (Futuramente checar aqui se `self.valid_moves.contains(&(row, col))` antes de mover)
             if let Some(piece) = self.board[from_row][from_col] {
                 if self.valid_moves.contains(&(row, col)) {
                     // Move a peça para o destino
                     self.board[row][col] = Some(piece);
                     // Apaga a peça da posição antiga
                     self.board[from_row][from_col] = None;
+
+                    // ALTERNA O TURNO: Passa para o oponente (IA)
+                    self.current_turn = match self.current_turn {
+                        PieceColor::White => PieceColor::Black,
+                        PieceColor::Black => PieceColor::White,
+                    };
                 }
             }
 
@@ -61,11 +77,13 @@ impl ChessGame {
             self.valid_moves.clear(); // Limpa as dicas de movimento da tela
         } else {
             // Se nenhuma casa estava selecionada, tentamos selecionar a atual
-            if self.board[row][col].is_some() {
-                self.selected_square = Some((row, col));
-
-                // Calcula os movimentos baseando-se na peça selecionada AGORA
-                self.calculate_valid_moves(row, col);
+            if let Some(piece) = self.board[row][col] {
+                // SÓ permite selecionar se a peça for da cor do jogador
+                if piece.color == self.player_color {
+                    self.selected_square = Some((row, col));
+                    // Calcula os movimentos baseando-se na peça selecionada AGORA
+                    self.calculate_valid_moves(row, col);
+                }
             }
         }
     }

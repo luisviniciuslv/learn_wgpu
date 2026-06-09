@@ -37,8 +37,13 @@ impl ChessGame {
         // Desenha as casas e as peças texturizadas
         for row in 0..8 {
             for col in 0..8 {
-                let cell_x = start_x + col as f32 * cell_size;
-                let cell_y = start_y + row as f32 * cell_size;
+                let (visual_row, visual_col) = if self.player_color == PieceColor::Black {
+                    (7 - row, 7 - col)
+                } else {
+                    (row, col)
+                };
+                let cell_x = start_x + visual_col as f32 * cell_size;
+                let cell_y = start_y + visual_row as f32 * cell_size;
 
                 let is_light = (row + col) % 2 == 0;
                 let cell_color = if is_light {
@@ -101,8 +106,15 @@ impl ChessGame {
         }
 
         if let Some((sel_row, sel_col)) = self.selected_square {
-            let sel_x = start_x + sel_col as f32 * cell_size;
-            let sel_y = start_y + sel_row as f32 * cell_size;
+            // Aplica a inversão visual se o jogador for as pretas
+            let (visual_row, visual_col) = if self.player_color == PieceColor::Black {
+                (7 - sel_row, 7 - sel_col)
+            } else {
+                (sel_row, sel_col)
+            };
+
+            let sel_x = start_x + visual_col as f32 * cell_size;
+            let sel_y = start_y + visual_row as f32 * cell_size;
 
             // Uma borda translúcida verde indicando seleção
             renderer.draw_rect(
@@ -114,10 +126,17 @@ impl ChessGame {
             );
         }
 
-        // NOVO: Desenha uma borda amarela onde o CURSOR DO TECLADO está apontando
+        // Desenha uma borda amarela onde o CURSOR DO TECLADO está apontando
         if let Some((cur_row, cur_col)) = self.cursor {
-            let cur_x = start_x + cur_col as f32 * cell_size;
-            let cur_y = start_y + cur_row as f32 * cell_size;
+            // Aplica a inversão visual se o jogador for as pretas
+            let (visual_row, visual_col) = if self.player_color == PieceColor::Black {
+                (7 - cur_row, 7 - cur_col)
+            } else {
+                (cur_row, cur_col)
+            };
+
+            let cur_x = start_x + visual_col as f32 * cell_size;
+            let cur_y = start_y + visual_row as f32 * cell_size;
             renderer.draw_rect(
                 cur_x + cell_size * 0.15,
                 cur_y + cell_size * 0.15,

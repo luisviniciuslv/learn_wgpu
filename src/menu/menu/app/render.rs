@@ -16,6 +16,13 @@ impl App {
                 }
             }
         }
+
+        if let Some(ref mut game) = self.chess_game {
+            // Se o turno atual não for igual à cor escolhida para o jogador, significa que é o turno da IA
+            if game.current_turn != game.player_color {
+                game.make_ai_move();
+            }
+        }
     }
 
     pub(super) fn render(&mut self) -> anyhow::Result<()> {
