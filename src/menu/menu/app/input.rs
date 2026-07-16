@@ -17,6 +17,40 @@ impl App {
 
         // 2. COMANDOS DO XADREZ: Se o jogo estiver ativo, intercepta as teclas e sai da função imediatamente
         if let Some(ref mut game) = self.chess_game {
+            if game.game_outcome.is_some() {
+                match key_code {
+                    KeyCode::Escape => self.back_menu(event_loop),
+                    _ => {}
+                }
+
+                if let Some(ref renderer) = self.renderer {
+                    renderer.window.request_redraw();
+                }
+                return;
+            }
+
+            if game.promotion_pending.is_some() {
+                match key_code {
+                    KeyCode::ArrowLeft => {
+                        game.promotion_cursor = game.promotion_cursor.saturating_sub(1);
+                    }
+                    KeyCode::ArrowRight => {
+                        if game.promotion_cursor < 3 {
+                            game.promotion_cursor += 1;
+                        }
+                    }
+                    KeyCode::Enter | KeyCode::Space => {
+                        game.apply_promotion(game.promotion_cursor);
+                    }
+                    KeyCode::Escape => self.back_menu(event_loop),
+                    _ => {}
+                }
+                if let Some(ref renderer) = self.renderer {
+                    renderer.window.request_redraw();
+                }
+                return;
+            }
+
             let cursor = game.cursor.unwrap_or((0, 0)); // Garante que o cursor nunca seja None aqui, mas sim (0, 0) se não tiver sido setado
 
             // Verifica se o jogador atual está a jogar com as Pretas
@@ -92,6 +126,23 @@ impl App {
             return; // IMPORTANTE: Sai da função aqui para NUNCA executar os comandos do menu abaixo
         }
 
+        if let Some(ref mut explorer) = self.explorer {
+            match key_code {
+                KeyCode::Escape => self.back_menu(event_loop),
+                KeyCode::ArrowDown => explorer.proximo(),
+                KeyCode::ArrowUp => explorer.anterior(),
+                KeyCode::Enter => explorer.ao_pressionar_enter(),
+                KeyCode::Backspace => explorer.voltar_diretorio(),
+                KeyCode::KeyC if self.ctrl_pressed => explorer.copiar_caminho_de_arquivo_ou_pasta(),
+                KeyCode::KeyV if self.ctrl_pressed => explorer.colar_arquivo_ou_pasta_pelo_caminho(),
+                _ => {}
+            }
+            if let Some(ref renderer) = self.renderer {
+                renderer.window.request_redraw();
+            }
+            return; // Sai da função para não afetar o carrossel de menus ao fundo
+        }
+
         // 3. COMANDOS DO MENU PRINCIPAL: Só serão executados se "self.chess_game" for None
         match key_code {
             KeyCode::Escape => self.back_menu(event_loop),
@@ -128,8 +179,35 @@ impl App {
                 if let Some(ref mut game) = self.chess_game {
                     let mx = self.mouse_pos.0;
                     let my = self.mouse_pos.1;
+
+                    // Check if game is over and player clicked "Nova Partida" button
+                    if game.game_outcome.is_some() {
+                        if let Some((btn_x, btn_y, btn_w, btn_h)) = game.new_game_button_rect {
+                            if mx >= btn_x
+                                && mx <= btn_x + btn_w
+                                && my >= btn_y
+                                && my <= btn_y + btn_h
+                            {
+                                game.reset_match();
+                                if let Some(ref renderer) = self.renderer {
+                                    renderer.window.request_redraw();
+                                }
+                            }
+                        }
+                        return;
+                    }
+
                     let vp_w = self.viewport.width;
                     let vp_h = self.viewport.height;
+
+                    if game.promotion_pending.is_some() {
+                        if game.try_click_promotion(mx, my, vp_w, vp_h) {
+                            if let Some(ref renderer) = self.renderer {
+                                renderer.window.request_redraw();
+                            }
+                        }
+                        return; // Se tem promoção pendente, consome o clique e não faz mais nada
+                    }
 
                     // Tenta converter o clique do mouse em uma casa do tabuleiro
                     if let Some((row, col)) = game.mouse_to_square(mx, my, vp_w, vp_h) {
@@ -142,7 +220,19 @@ impl App {
                     }
                 }
 
-                // 3. Controles do menu principal (só rodam se o clique NÃO foi dentro do tabuleiro de xadrez)
+                // 3. O explorador consome clique em itens antes do menu de fundo.
+                if let Some(ref mut explorer) = self.explorer {
+                    let mx = self.mouse_pos.0;
+                    let my = self.mouse_pos.1;
+                    if explorer.click(mx, my) {
+                        if let Some(ref renderer) = self.renderer {
+                            renderer.window.request_redraw();
+                        }
+                        return;
+                    }
+                }
+
+                // 4. Controles do menu principal (só rodam se não foi consumido por outras telas)
                 if let Some(arrow) = self.hovered_arrow {
                     self.pressed_arrow = Some(arrow);
                     match arrow {

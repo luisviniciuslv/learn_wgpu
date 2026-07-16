@@ -1,4 +1,4 @@
-use crate::menu::chess::PieceColor;
+use crate::menu::chess::{MovingPiece, PieceColor, PieceType};
 
 // Lógica de entrada do usuário: mouse e teclado
 use super::ChessGame;
@@ -43,7 +43,7 @@ impl ChessGame {
 
     pub fn select_or_move(&mut self, row: usize, col: usize) {
         // Bloqueia qualquer ação se não for o turno do jogador
-        if self.current_turn != self.player_color {
+        if self.current_turn != self.player_color || self.game_outcome.is_some() {
             return;
         }
 
@@ -59,16 +59,52 @@ impl ChessGame {
             // 2. Se ele clicou em OUTRA casa, movemos a peça
             if let Some(piece) = self.board[from_row][from_col] {
                 if self.valid_moves.contains(&(row, col)) {
+                    let board_before_move = self.board;
+                    let was_capture = board_before_move[row][col].is_some();
+                    let was_pawn_move = piece.piece_type == PieceType::Pawn;
+
                     // Move a peça para o destino
                     self.board[row][col] = Some(piece);
                     // Apaga a peça da posição antiga
                     self.board[from_row][from_col] = None;
 
-                    // ALTERNA O TURNO: Passa para o oponente (IA)
-                    self.current_turn = match self.current_turn {
-                        PieceColor::White => PieceColor::Black,
-                        PieceColor::Black => PieceColor::White,
-                    };
+                    // Registra a animação de movimento do jogador
+                    self.moving_piece = Some(MovingPiece {
+                        piece,
+                        from_row,
+                        from_col,
+                        to_row: row,
+                        to_col: col,
+                        t: 0.0,
+                    });
+                    // Verifica se ocorreu uma promoção
+                    if piece.piece_type == PieceType::Pawn && (row == 0 || row == 7) {
+                        self.promotion_move_was_capture = was_capture;
+                        self.promotion_pending = Some((row, col));
+                        self.promotion_cursor = 0;
+                    } else {
+                        // ALTERNA O TURNO: Passa para o oponente (IA)
+                        self.current_turn = match self.current_turn {
+                            PieceColor::White => PieceColor::Black,
+                            PieceColor::Black => PieceColor::White,
+                        };
+
+                        if self.register_position_and_check_draw(was_capture || was_pawn_move) {
+                            return;
+                        }
+
+                        if self.is_insufficient_material_draw() {
+                            self.finish_draw_insufficient_material();
+                            return;
+                        }
+
+                        if self
+                            .collect_legal_moves_for_turn(self.current_turn)
+                            .is_empty()
+                        {
+                            self.finish_game_for_side(self.current_turn);
+                        }
+                    }
                 }
             }
 
@@ -86,5 +122,72 @@ impl ChessGame {
                 }
             }
         }
+    }
+
+    pub fn apply_promotion(&mut self, choice_idx: usize) {
+        if self.game_outcome.is_some() {
+            return;
+        }
+
+        if let Some((r, c)) = self.promotion_pending {
+            if let Some(mut piece) = self.board[r][c] {
+                piece.piece_type = match choice_idx {
+                    0 => PieceType::Queen,
+                    1 => PieceType::Rook,
+                    2 => PieceType::Bishop,
+                    3 => PieceType::Knight,
+                    _ => PieceType::Queen,
+                };
+                self.board[r][c] = Some(piece);
+            }
+            self.promotion_pending = None;
+
+            // Alterna o turno para o oponente
+            self.current_turn = match self.current_turn {
+                PieceColor::White => PieceColor::Black,
+                PieceColor::Black => PieceColor::White,
+            };
+
+            let pawn_or_capture = true;
+            self.promotion_move_was_capture = false;
+
+            if self.register_position_and_check_draw(pawn_or_capture) {
+                return;
+            }
+
+            if self.is_insufficient_material_draw() {
+                self.finish_draw_insufficient_material();
+                return;
+            }
+
+            if self
+                .collect_legal_moves_for_turn(self.current_turn)
+                .is_empty()
+            {
+                self.finish_game_for_side(self.current_turn);
+            }
+        }
+    }
+
+    pub fn try_click_promotion(&mut self, mx: f32, my: f32, vp_w: f32, vp_h: f32) -> bool {
+        if self.promotion_pending.is_none() {
+            return false;
+        }
+
+        let scale_factor = vp_w.min(vp_h * 0.8) / 800.0;
+        let menu_w = 400.0 * scale_factor;
+        let menu_h = 120.0 * scale_factor;
+        let start_x = (vp_w - menu_w) * 0.5;
+        let start_y = (vp_h - menu_h) * 0.5;
+
+        if mx >= start_x && mx < start_x + menu_w && my >= start_y && my < start_y + menu_h {
+            let item_w = menu_w / 4.0;
+            let choice_idx = ((mx - start_x) / item_w) as usize;
+            if choice_idx < 4 {
+                self.apply_promotion(choice_idx);
+                return true;
+            }
+        }
+        false
     }
 }

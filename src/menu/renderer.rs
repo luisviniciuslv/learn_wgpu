@@ -334,7 +334,7 @@ impl Renderer {
         });
 
         // Buffers grandes o suficiente para UI complexa (ícones + texto + botões)
-        let max_vertices = 5000;
+        let max_vertices: usize = 20000;
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dynamic Vertex Buffer"),
             size: (max_vertices * std::mem::size_of::<Vertex>()) as u64,
@@ -342,7 +342,7 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        let max_indices = 8000;
+        let max_indices = 30000;
         let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Dynamic Index Buffer"),
             size: (max_indices * std::mem::size_of::<u16>()) as u64,
@@ -403,6 +403,38 @@ impl Renderer {
         self.indices_data.clear();
         self.batches.clear();
         self.active_bind_group = None;
+    }
+
+    fn ensure_dynamic_buffer_capacity(&mut self) {
+        let needed_vertex_bytes = (self.vertices_data.len() * std::mem::size_of::<Vertex>()) as u64;
+        if needed_vertex_bytes > self.vertex_buffer.size() {
+            let mut new_size = self.vertex_buffer.size().max(1);
+            while new_size < needed_vertex_bytes {
+                new_size *= 2;
+            }
+
+            self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dynamic Vertex Buffer"),
+                size: new_size,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+
+        let needed_index_bytes = (self.indices_data.len() * std::mem::size_of::<u16>()) as u64;
+        if needed_index_bytes > self.index_buffer.size() {
+            let mut new_size = self.index_buffer.size().max(1);
+            while new_size < needed_index_bytes {
+                new_size *= 2;
+            }
+
+            self.index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dynamic Index Buffer"),
+                size: new_size,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -610,6 +642,7 @@ impl Renderer {
         // Cada vértice tem tamanho fixo (múltiplo de 4), então vertex_buffer é sempre seguro.
         // Os índices são u16 (2 bytes), então um número ímpar de índices = tamanho ímpar de u16s
         // que pode gerar tamanhos não alinhados. Padding com um índice extra se necessário.
+        self.ensure_dynamic_buffer_capacity();
         self.queue.write_buffer(
             &self.vertex_buffer,
             0,

@@ -1,4 +1,5 @@
 use crate::menu::chess::ChessGame;
+use crate::menu::explorer::FileExplorer;
 use crate::menu::menu::assets::{carregar_fonte, gerar_icones};
 use crate::menu::menu::layout::{CHESS_TARGET_ASPECT_RATIO, carousel_layout};
 use crate::menu::types::MenuState;
@@ -67,6 +68,11 @@ impl App {
             return;
         }
 
+        if item_id == "explorer" {
+            self.explorer = Some(FileExplorer::new(std::path::PathBuf::from(".")));
+            return;
+        }
+
         if children {
             if let Some(renderer) = &self.renderer {
                 let font = carregar_fonte();
@@ -78,7 +84,7 @@ impl App {
 
     pub(super) fn pop_menu(&mut self) {
         if self.chess_game.is_some() {
-            self.chess_game = None;
+            let _ = self.chess_game.take();
 
             self.target_aspect_ratio = self.saved_target_aspect_ratio;
             self.last_width = self.saved_width;
@@ -96,6 +102,11 @@ impl App {
             return;
         }
 
+        if self.explorer.is_some() {
+            let _ = self.explorer.take();
+            return;
+        }
+
         if self.menu_stack.len() > 1 {
             self.menu_stack.pop();
             self.icones_sub.clear();
@@ -104,6 +115,11 @@ impl App {
 
     pub(super) fn back_menu(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.chess_game.is_some() {
+            self.pop_menu();
+            return;
+        }
+
+        if self.explorer.is_some() {
             self.pop_menu();
             return;
         }

@@ -1,9 +1,9 @@
 use crate::menu::chess::ChessGame;
+use crate::menu::explorer::FileExplorer;
 use crate::menu::menu::assets::IconeItem;
 use crate::menu::menu::layout::{BASE_HEIGHT, BASE_WIDTH};
 use crate::menu::renderer::Viewport;
 use crate::menu::types::{ArrowButton, MenuItem, MenuState};
-
 // =============================================================================
 //  Nucleo do Aplicativo (estado)
 // =============================================================================
@@ -18,6 +18,7 @@ pub struct App {
     pub(super) pressed_arrow: Option<crate::menu::types::ArrowId>,
     pub(super) hovered_fullscreen_button: bool,
     pub(super) pressed_fullscreen_button: bool,
+    pub(super) ctrl_pressed: bool,
 
     pub(super) viewport: Viewport,
     pub(super) target_aspect_ratio: f32,
@@ -32,6 +33,8 @@ pub struct App {
 
     pub(super) chess_game: Option<ChessGame>,
     pub(super) chess_texture: Option<std::sync::Arc<wgpu::BindGroup>>,
+
+    pub(super) explorer: Option<FileExplorer>,
 
     pub(super) saved_target_aspect_ratio: f32,
     pub(super) saved_width: u32,
@@ -86,6 +89,11 @@ impl App {
                         children: None,
                     },
                     MenuItem {
+                        id: "explorer", // Adicione o item aqui
+                        label: "Explorer",
+                        children: None,
+                    },
+                    MenuItem {
                         id: "editor",
                         label: "Editor",
                         children: None,
@@ -108,6 +116,7 @@ impl App {
             pressed_arrow: None,
             hovered_fullscreen_button: false,
             pressed_fullscreen_button: false,
+            ctrl_pressed: false,
             viewport: Viewport {
                 x: 0.0,
                 y: 0.0,
@@ -131,6 +140,7 @@ impl App {
             restore_windowed_size_after_fullscreen: None,
             suppress_maximize_to_fullscreen_once: false,
             is_fullscreen: false,
+            explorer: None,
         }
     }
 }

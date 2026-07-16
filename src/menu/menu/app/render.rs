@@ -18,8 +18,18 @@ impl App {
         }
 
         if let Some(ref mut game) = self.chess_game {
-            // Se o turno atual não for igual à cor escolhida para o jogador, significa que é o turno da IA
-            if game.current_turn != game.player_color {
+            if let Some(ref mut mp) = game.moving_piece {
+                mp.t += 0.02; // Velocidade da animação
+                if mp.t >= 1.0 {
+                    game.moving_piece = None; // Finaliza animação
+                }
+            }
+
+            // MODIFICADO: A IA só deve fazer o movimento dela se NÃO houver peça animando!
+            if game.game_outcome.is_none()
+                && game.moving_piece.is_none()
+                && game.current_turn != game.player_color
+            {
                 game.make_ai_move();
             }
         }
@@ -95,7 +105,7 @@ impl App {
             renderer.draw_rect(bx + bw - pad - t, by + bh - pad - l, t, l, c);
         }
 
-        if let Some(ref game) = self.chess_game {
+        if let Some(ref mut game) = self.chess_game {
             let scale_factor = vp_w.min(vp_h * 0.8) / BASE_WIDTH;
 
             let header_h = 75.0 * scale_factor;
@@ -157,6 +167,42 @@ impl App {
                 }
             }
 
+            let cursor_size = 8.0 * scale_factor;
+            renderer.draw_rect(
+                self.mouse_pos.0 - cursor_size * 0.5,
+                self.mouse_pos.1 - cursor_size * 0.5,
+                cursor_size,
+                cursor_size,
+                [1.0, 0.9, 0.0, 0.9],
+            );
+
+            renderer.present(self.viewport)?;
+            return Ok(());
+        }
+
+        if let Some(ref mut explorer) = self.explorer {
+            // Limpa e renderiza o explorador
+            explorer.render(renderer, vp_w, vp_h)?;
+
+            // Desenha o botão padrão de voltar (Seta para a esquerda)
+            for arrow in &self.arrows {
+                if arrow.id == ArrowId::Back {
+                    let is_hovered = self.hovered_arrow == Some(arrow.id);
+                    let is_pressed = self.pressed_arrow == Some(arrow.id);
+                    let color = if is_pressed {
+                        [0.2, 0.6, 1.0, 1.0]
+                    } else if is_hovered {
+                        [0.4, 0.7, 1.0, 1.0]
+                    } else {
+                        [0.2, 0.3, 0.5, 1.0]
+                    };
+                    desenhar_seta_botao(
+                        renderer, arrow.id, arrow.x, arrow.y, arrow.w, arrow.h, color,
+                    );
+                }
+            }
+
+            // Desenha o cursor do mouse customizado do projeto
             let cursor_size = 8.0 * scale_factor;
             renderer.draw_rect(
                 self.mouse_pos.0 - cursor_size * 0.5,

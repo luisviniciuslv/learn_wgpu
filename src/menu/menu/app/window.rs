@@ -159,6 +159,9 @@ impl App {
             let b_y = (chess_start_y * 0.25).max(4.0);
             let b_h = (chess_start_y * 0.50).max(16.0).min(40.0 * scale_factor);
             (b_y, b_y, b_h, b_h)
+        } else if self.explorer.is_some() {
+            let b_h = 34.0 * scale_factor;
+            (16.0 * scale_factor, 10.0 * scale_factor, b_h, b_h)
         } else {
             (
                 20.0 * scale_factor,

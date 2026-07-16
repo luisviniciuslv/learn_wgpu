@@ -141,9 +141,45 @@ impl ApplicationHandler for App {
                 ..
             } => self.handle_keyboard(event_loop, key_code),
 
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.ctrl_pressed = modifiers.state().control_key();
+            }
+
             WindowEvent::CursorMoved { position, .. } => self.handle_cursor_moved(position),
 
             WindowEvent::MouseInput { state, button, .. } => self.handle_mouse_input(state, button),
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(ref mut explorer) = self.explorer {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => {
+                            if y > 0.0 {
+                                -3
+                            } else if y < 0.0 {
+                                3
+                            } else {
+                                0
+                            }
+                        }
+                        MouseScrollDelta::PixelDelta(pos) => {
+                            if pos.y > 0.0 {
+                                -1
+                            } else if pos.y < 0.0 {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                    };
+
+                    if lines != 0 {
+                        explorer.scroll_by_lines(lines);
+                        if let Some(ref renderer) = self.renderer {
+                            renderer.window.request_redraw();
+                        }
+                    }
+                }
+            }
 
             WindowEvent::RedrawRequested => {
                 if self.apply_pending_window_restore() {
