@@ -133,8 +133,16 @@ impl App {
                 KeyCode::ArrowUp => explorer.anterior(),
                 KeyCode::Enter => explorer.ao_pressionar_enter(),
                 KeyCode::Backspace => explorer.voltar_diretorio(),
-                KeyCode::KeyC if self.ctrl_pressed => explorer.copiar_caminho_de_arquivo_ou_pasta(),
-                KeyCode::KeyV if self.ctrl_pressed => explorer.colar_arquivo_ou_pasta_pelo_caminho(),
+                KeyCode::KeyC if self.ctrl_pressed => {
+                    explorer.copiar_caminho_de_arquivo_ou_pasta(false)
+                }
+                KeyCode::KeyX if self.ctrl_pressed => {
+                    explorer.copiar_caminho_de_arquivo_ou_pasta(true)
+                }
+                KeyCode::KeyV if self.ctrl_pressed => {
+                    explorer.colar_arquivo_ou_pasta_pelo_caminho()
+                }
+                KeyCode::Delete => explorer.deletar_arquivo_ou_pasta(),
                 _ => {}
             }
             if let Some(ref renderer) = self.renderer {

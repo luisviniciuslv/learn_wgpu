@@ -1,5 +1,6 @@
 // src/menu/explorer.rs
 use crate::menu::renderer::{Renderer, Texture, rasterizar_texto};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -16,6 +17,12 @@ pub struct ElementoArquivo {
     pub eh_diretorio: bool,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct CopyInfo {
+    path: String,
+    is_crop: bool,
+}
+
 pub struct FileExplorer {
     pub caminho_atual: PathBuf,
     pub itens: Vec<ElementoArquivo>,
@@ -25,6 +32,7 @@ pub struct FileExplorer {
     viewport_h: f32,
     fonte: ab_glyph::FontArc,
     cache_rotulos: HashMap<String, LabelTexture>,
+    clipboard_interno: Option<CopyInfo>,
 }
 
 impl FileExplorer {
@@ -39,6 +47,7 @@ impl FileExplorer {
             viewport_h: 720.0,
             fonte: carregar_fonte_explorer(),
             cache_rotulos: HashMap::new(),
+            clipboard_interno: None,
         };
         explorer.atualizar_arquivos();
         explorer
@@ -178,46 +187,67 @@ impl FileExplorer {
         }
     }
 
-    pub fn copiar_caminho_de_arquivo_ou_pasta(&mut self) {
+    pub fn copiar_caminho_de_arquivo_ou_pasta(&mut self, is_crop: bool) {
         if let Some(index) = self.selecionado {
             if index < self.itens.len() {
                 let item_selecionado: &ElementoArquivo = &self.itens[index];
                 let caminho_completo = self.caminho_atual.join(&item_selecionado.nome);
-                if let Err(e) = arboard::Clipboard::new()
-                    .and_then(|mut clipboard| clipboard.set_text(caminho_completo.to_string_lossy().into_owned()))
-                {
-                    eprintln!("Erro ao copiar para a área de transferência: {}", e);
-                }
+
+                let copy_info = CopyInfo {
+                    is_crop,
+                    path: caminho_completo.to_str().unwrap().to_owned(),
+                };
+
+                println!("Copiado (internamente): {:?}", copy_info.path);
+                self.clipboard_interno = Some(copy_info);
             }
         }
     }
 
     pub fn colar_arquivo_ou_pasta_pelo_caminho(&mut self) {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            if let Ok(texto) = clipboard.get_text() {
-                let caminho_copiado = PathBuf::from(texto);
-                if caminho_copiado.exists() {
-                    let destino = self.caminho_atual.join(caminho_copiado.file_name().unwrap());
-                    if let Err(e) = fs::copy(&caminho_copiado, &destino) {
+        println!("Tentando colar (internamente)...");
+        if let Some(copy_info) = &self.clipboard_interno {
+            let caminho_copiado = std::path::PathBuf::from(&copy_info.path);
+            if caminho_copiado.exists() {
+                let destino = self
+                    .caminho_atual
+                    .join(caminho_copiado.file_name().unwrap());
+                if copy_info.is_crop {
+                    if let Err(e) = std::fs::rename(&caminho_copiado, &destino) {
+                        eprintln!("Erro ao recortar arquivo: {}", e);
+                    } else {
+                        // Opcional: limpar clipboard após recortar
+                        self.clipboard_interno = None;
+                    }
+                } else {
+                    if let Err(e) = std::fs::copy(&caminho_copiado, &destino) {
                         eprintln!("Erro ao colar arquivo: {}", e);
                     }
-                    self.atualizar_arquivos();
                 }
+                self.atualizar_arquivos();
+            } else {
+                eprintln!("O caminho copiado não existe: {:?}", caminho_copiado);
             }
+        } else {
+            eprintln!("Clipboard interno vazio.");
         }
     }
 
-    pub fn recortar_arquivo_ou_pasta_pelo_caminho(&mut self) {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            if let Ok(texto) = clipboard.get_text() {
-                let caminho_copiado = PathBuf::from(texto);
-                if caminho_copiado.exists() {
-                    let destino = self.caminho_atual.join(caminho_copiado.file_name().unwrap());
-                    if let Err(e) = fs::rename(&caminho_copiado, &destino) {
-                        eprintln!("Erro ao recortar arquivo: {}", e);
+    pub fn deletar_arquivo_ou_pasta(&mut self) {
+        if let Some(index) = self.selecionado {
+            if index < self.itens.len() {
+                let item_selecionado: &ElementoArquivo = &self.itens[index];
+                let caminho_completo = self.caminho_atual.join(&item_selecionado.nome);
+                if item_selecionado.eh_diretorio {
+                    if let Err(e) = std::fs::remove_dir_all(&caminho_completo) {
+                        eprintln!("Erro ao deletar arquivo: {}", e);
                     }
-                    self.atualizar_arquivos();
+                } else {
+                    if let Err(e) = std::fs::remove_file(&caminho_completo) {
+                        eprintln!("Erro ao deletar arquivo: {}", e);
+                    }
                 }
+                self.atualizar_arquivos();
             }
         }
     }
